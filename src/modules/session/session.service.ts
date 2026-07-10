@@ -13,40 +13,146 @@ import type { CreateSessionDto } from './dto/session.dto';
 import { AppEvents } from 'src/common/constants/workflow.constants';
 import { WorkspaceService } from '../workspace/workspace.service';
 
-/** Strip ANSI escape codes from terminal output. */
-function cleanOutput(raw: string): string {
-  // Step 1: Strip ALL ANSI escape sequences
-  let s = raw;
+// Buffer unfinished ANSI sequences across PTY data chunks
+const rawBuffer = new Map<string, string>();
+
+/** Convert terminal output to Telegram-safe HTML. */
+function cleanOutput(sessionId: string, raw: string): string {
+  // Prepend any leftover from previous chunk, then split again
+  const prev = rawBuffer.get(sessionId) || '';
+  let s = prev + raw;
+
+  // Save trailing partial ANSI sequence (ESC[digits or ESC[digits;digits) for next chunk
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\[[0-9;?]*[a-zA-Z]/g, '');  // CSI sequences (including ? params)
+  const partialRe = /\x1B\[[\d;]*$/;
+  const partialMatch = s.match(partialRe);
+  if (partialMatch) {
+    rawBuffer.set(sessionId, partialMatch[0]);
+    s = s.slice(0, partialMatch.index);
+  } else {
+    rawBuffer.delete(sessionId);
+  }
+
+  // Step 1: Strip OSC sequences (title, etc.) and APC/PM/SOS
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\][^\x07]*\x07/g, '');       // OSC title sequences (terminated by BEL)
+  s = s.replace(/\x1B\][^\x07]*\x07/g, '');
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B[PX^_]./g, '');              // APC/PM/SOS single-char
+  s = s.replace(/\x1B[PX^_]./g, '');
 
-  // Step 2: Strip Unicode TUI/box-drawing characters
-  s = s.replace(/[\u2500-\u257F]/g, '');          // Box Drawing
-  s = s.replace(/[\u2580-\u259F]/g, '');          // Block Elements
-  s = s.replace(/[\u2800-\u28FF]/g, '');          // Braille Patterns (⠋⠙⠹ spinner)
-  s = s.replace(/[\u25A0-\u25FF]/g, '');          // Geometric Shapes (■□▣)
-  s = s.replace(/[\u2B1B-\u2B1F]/g, '');          // ⬛⬝⬞ squares
-  s = s.replace(/[┌┐└┘├┤┬┴┼╭╮╯╰╱╲╳╹╺╻╼╽╾╿▁▂▃▄▅▆▇█▉▊▋▌▍▎▏▐░▒▓▔▕]/g, '');
+  // Strip cursor hide/show and DEC private mode sequences
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/\x1B\[\?[\d;]*[a-zA-Z]/g, '');
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/\x1B\[\??25[lh]/g, '');
 
-  // Step 3: Strip known TUI status patterns
-  s = s.replace(/·\s*DeepSeek[^\n]*/g, '');       // Model name in status bar
-  s = s.replace(/▣\s*Build[^\n]*/g, '');          // Build status
-  s = s.replace(/➜\s*~/g, '');                    // Shell prompt
-  s = s.replace(/\d+\.\d+K\s*\(\d+%\)[^\n]*/g, ''); // Progress: 27.3K (3%)
-  s = s.replace(/\s*·\s*\$[\d.]+/g, '');          // Cost: · $0.00
+  // Strip other known non-SGR terminal control sequences (cursor pos, erase, scroll)
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/\x1B\[[\d;]*[HJKfFgGILMPSZ@`bhilnrst]/g, '');
 
-  // Step 4: Remove lines that are only TUI chrome or status bars
-  const lines = s.split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 2)
-    .filter(l => !/^[\s⬝■▪▫▬▲▼▶◆◇○◉◎●◐◑◒◓◔◕◖◗◦◯┃│]+$/.test(l))  // Pure TUI
-    .filter(l => !/^(esc interrupt|tab agents|ctrl\+p commands)/i.test(l)); // Status bar labels
+  // Strip any remaining bare ESC byte
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/\x1B/g, '');
 
-  return lines.join('\n');
+  // Strip orphaned ANSI-code text (ESC byte was in previous chunk)
+  s = s.replace(/\[\d+(?:;\d+)*m/g, '');
+
+  // Strip progress bar blocks and spinner braille
+  s = s.replace(/[■⬝]+/g, '');
+  s = s.replace(/[\u2800-\u28FF]/g, '');
+  s = s.replace(/[▣▢]/g, '');
+
+  // Strip TUI status bar patterns (progress, cost, model name)
+  s = s.replace(/·\s*DeepSeek[^\n]*/g, '');
+  s = s.replace(/▣\s*Build[^\n]*/g, '');
+  s = s.replace(/➜\s*~/g, '');
+  s = s.replace(/\d+\.\d+K\s*\(\d+%\)[^\n]*/g, '');
+  s = s.replace(/\s*·\s*\$[\d.]+/g, '');
+
+  // Remove lines that are only TUI chrome
+  const chromeRe = /^[\s⬝■▪▫▬▲▼▶◆◇○◉◎●◐◑◒◓◔◕◖◗◦◯┃│]+$/;
+  const statusRe = /^(esc interrupt|tab agents|ctrl\+p commands)/i;
+  s = s.split('\n')
+    .map(l => l.trimEnd())
+    .filter(l => l.length > 0 && !chromeRe.test(l) && !statusRe.test(l))
+    .join('\n');
+
+  // Tokenize remaining CSI sequences and text, converting SGR to HTML
+  type Token = { t: 'text'; v: string } | { t: 'ansi'; v: string };
+  const tokens: Token[] = [];
+  let last = 0;
+  // eslint-disable-next-line no-control-regex
+  const csiRe = /\x1B\[[\d;]*[a-zA-Z]/g;
+  let m: RegExpExecArray | null;
+  while ((m = csiRe.exec(s)) !== null) {
+    if (m.index > last) tokens.push({ t: 'text', v: s.slice(last, m.index) });
+    tokens.push({ t: 'ansi', v: m[0] });
+    last = m.index + m[0].length;
+  }
+  if (last < s.length) tokens.push({ t: 'text', v: s.slice(last) });
+
+  // Walk tokens, emit HTML for SGR formatting codes
+  let bold = false, uline = false, italic = false;
+  const out: string[] = [];
+
+  function closeAll() {
+    let r = '';
+    if (uline) { r += '</u>'; uline = false; }
+    if (italic) { r += '</i>'; italic = false; }
+    if (bold) { r += '</b>'; bold = false; }
+    return r;
+  }
+  function openAll() {
+    let r = '';
+    if (bold) r += '<b>';
+    if (italic) r += '<i>';
+    if (uline) r += '<u>';
+    return r;
+  }
+
+  for (const tok of tokens) {
+    if (tok.t === 'text') {
+      const txt = tok.v
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      if (txt) out.push(openAll() + txt + closeAll());
+    } else {
+      const sgr = tok.v.match(/^\x1B\[([\d;]*)m$/);
+      if (sgr) {
+        const params = sgr[1] ? sgr[1].split(';').map(Number) : [0];
+        for (const p of params) {
+          if (p === 0 || p === 22 || p === 24 || p === 23) {
+            if (p === 0 || p === 22) bold = false;
+            if (p === 0 || p === 24) uline = false;
+            if (p === 0 || p === 23) italic = false;
+          } else if (p === 1) bold = true;
+          else if (p === 4) uline = true;
+          else if (p === 3) italic = true;
+        }
+      }
+    }
+  }
+
+  let result = out.join('');
+
+  // Convert numbered option lines into HTML lists
+  const lines = result.split('\n');
+  const formatted: string[] = [];
+  let inList = false;
+
+  for (const line of lines) {
+    const opt = line.match(/^\s*(\d+)[.)]\s+(.+)$/);
+    if (opt) {
+      if (!inList) { formatted.push('<ul>'); inList = true; }
+      formatted.push(`  <li><code>${opt[1]}.</code> ${opt[2]}</li>`);
+    } else {
+      if (inList) { formatted.push('</ul>'); inList = false; }
+      formatted.push(line);
+    }
+  }
+  if (inList) formatted.push('</ul>');
+
+  return formatted.join('\n');
 }
 
 export interface ActiveSession {
@@ -178,7 +284,7 @@ export class SessionService {
 
     // PTY data event — captures ALL output, strips ANSI + TUI
     ptyProcess.onData((raw: string) => {
-      const clean = cleanOutput(raw);
+      const clean = cleanOutput(sessionRec.id, raw);
       if (!clean) return;
       session.outputBuffer += clean + '\n';
       session.emitter.emit('output', clean);
@@ -213,6 +319,7 @@ export class SessionService {
         });
 
       this.userSessions.delete(telegramUserId);
+      rawBuffer.delete(sessionRec.id);
       emitter.emit('exit', exitCode, durationMs);
       this.events.emit(AppEvents.SessionFinished, {
         sessionId: sessionRec.id,
@@ -258,7 +365,7 @@ export class SessionService {
         session.running = true;
 
         newPty.onData((raw: string) => {
-          const clean = cleanOutput(raw);
+          const clean = cleanOutput(session.id, raw);
           if (!clean) return;
           session.outputBuffer += clean + '\n';
           session.emitter.emit('output', clean);

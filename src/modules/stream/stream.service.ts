@@ -45,7 +45,7 @@ export class StreamService {
     try {
       const msg = await this.bot.telegram.sendMessage(
         chatId,
-        `<b>Session ${this.esc(sessionPublicId)}</b>\n<pre>Starting...</pre>`,
+        `<b>Session ${this.esc(sessionPublicId)}</b>\n<code>Starting...</code>`,
         { parse_mode: 'HTML' },
       );
       this.sessions.set(sessionPublicId, {
@@ -79,7 +79,7 @@ export class StreamService {
     try {
       await this.bot.telegram.sendMessage(
         chatId,
-        `<b>Session ${this.esc(sessionPublicId)}</b> ${status}\n<pre>${this.esc(display)}</pre>`,
+        `<b>Session ${this.esc(sessionPublicId)}</b> ${status}\n${display}`,
         { parse_mode: 'HTML' },
       );
     } catch (err) {
@@ -126,9 +126,9 @@ export class StreamService {
     const extra: Record<string, unknown> = { parse_mode: 'HTML' as const };
     if (hasQuestion) {
       extra.reply_markup = Markup.inlineKeyboard([
-        [Markup.button.callback('↹ Tab', JSON.stringify({ t: 'key:tab', v: '' })), Markup.button.callback('↵ Enter', JSON.stringify({ t: 'key:enter', v: '' }))],
-        [Markup.button.callback('⬆ Up', JSON.stringify({ t: 'key:up', v: '' })), Markup.button.callback('⬇ Down', JSON.stringify({ t: 'key:down', v: '' }))],
-        [Markup.button.callback('✕ Ctrl+C', JSON.stringify({ t: 'key:ctrl_c', v: '' }))],
+        [Markup.button.callback('↹ Tab', JSON.stringify({ t: 'key', v: 'tab' })), Markup.button.callback('↵ Enter', JSON.stringify({ t: 'key', v: 'enter' }))],
+        [Markup.button.callback('⬆ Up', JSON.stringify({ t: 'key', v: 'up' })), Markup.button.callback('⬇ Down', JSON.stringify({ t: 'key', v: 'down' }))],
+        [Markup.button.callback('✕ Ctrl+C', JSON.stringify({ t: 'key', v: 'ctrl+c' }))],
       ]).reply_markup;
     }
 
@@ -137,7 +137,7 @@ export class StreamService {
         sess.chatId,
         sess.messageId,
         undefined,
-        `<pre>${this.esc(display)}</pre>`,
+        display,
         extra as never,
       )
       .catch((err: unknown) => {
@@ -180,7 +180,7 @@ export class StreamService {
         sess.chatId,
         sess.messageId,
         undefined,
-        `<b>Session ${this.esc(sessionPublicId)}</b> ${status} (${Math.round(durationMs / 1000)}s)\n<pre>${this.esc(display)}</pre>`,
+        `<b>Session ${this.esc(sessionPublicId)}</b> ${status} (${Math.round(durationMs / 1000)}s)\n${display}`,
         { parse_mode: 'HTML' },
       );
     } catch (err) {

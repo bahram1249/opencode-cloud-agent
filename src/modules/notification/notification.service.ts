@@ -86,7 +86,7 @@ export class NotificationService {
     const lines: string[] = [];
     lines.push(`${emoji} <b>${html.escape(payload.title)}</b>`);
     if (payload.body) {
-      const truncated = payload.body.length > 3000 ? payload.body.slice(0, 3000) + '...' : payload.body;
+      const truncated = payload.body.length > 3000 ? payload.body.slice(length - 3000, length - 1) + '...' : payload.body;
       lines.push(html.escape(truncated));
     }
     lines.push(`<i>Task: ${payload.taskId}</i>`);
