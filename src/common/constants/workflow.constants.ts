@@ -57,6 +57,8 @@ export const AppEvents = {
   TaskFinished: 'task.finished',
   ApprovalRequired: 'task.approval.required',
   ExecutionOutput: 'execution.output',
+  SessionFinished: 'session.finished',
+  SessionOutput: 'session.output',
 } as const;
 
 export type AppEventName = (typeof AppEvents)[keyof typeof AppEvents];

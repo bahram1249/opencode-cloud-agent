@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Telegraf } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import { ConfigService } from '@nestjs/config';
 import type { NotificationPayload, NotificationButton } from 'src/common/types';
-import { Markup } from 'telegraf';
 import { html } from 'telegram-format';
 
 /**
@@ -49,6 +48,23 @@ export class NotificationService {
       await this.bot.telegram.sendMessage(chatId, text);
     } catch (err) {
       this.logger.error(`Failed to send raw message: ${(err as Error).message}`);
+    }
+  }
+
+  /** Send a raw text message with an inline keyboard. */
+  async sendRawWithKeyboard(
+    chatId: string,
+    text: string,
+    keyboard: ReturnType<typeof Markup.inlineKeyboard>,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.telegram.sendMessage(chatId, text, {
+         
+        reply_markup: keyboard.reply_markup as never,
+      });
+    } catch (err) {
+      this.logger.error(`Failed to send message with keyboard: ${(err as Error).message}`);
     }
   }
 

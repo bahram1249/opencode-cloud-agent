@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import { PRISMA_CLIENT } from 'src/database/prisma.module';
 import { WorkflowState } from 'src/common/constants/workflow.constants';
 import { AppEvents } from 'src/common/constants/workflow.constants';
@@ -18,33 +19,46 @@ export class TaskService {
 
   constructor(
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
+    private readonly config: ConfigService,
     private readonly events: EventEmitter2,
     private readonly repositoryService: RepositoryService,
   ) {}
 
   /** Create a new task from a parsed prompt. */
   async createTask(dto: CreateTaskDto): Promise<{ id: string; publicId: string }> {
-    const slug = dto.repositorySlug ?? process.env['DEFAULT_REPOSITORY'] ?? 'default';
-    const repo = await this.repositoryService.findBySlug(slug);
-    if (!repo) {
-      throw new NotFoundException(`Repository "${slug}" not found`);
+    const publicId = await this.generatePublicId();
+
+    const data: Prisma.TaskCreateInput = {
+      publicId,
+      prompt: dto.prompt,
+      status: WorkflowState.Pending,
+      createdBy: String(dto.telegramUserId ?? 0),
+      opencodeProfile: dto.opencodeProfile ?? null,
+      attachments: JSON.stringify(dto.attachments ?? []),
+      maxRetries: dto.maxRetries ?? 1,
+    };
+
+    if (dto.workspaceId) {
+      data.workspace = { connect: { id: dto.workspaceId } };
+    } else if (dto.repositorySlug) {
+      const repo = await this.repositoryService.findBySlug(dto.repositorySlug);
+      if (!repo) {
+        throw new NotFoundException(`Repository "${dto.repositorySlug}" not found`);
+      }
+      data.repository = { connect: { id: repo.id } };
+    } else {
+      const defaultSlug = this.config.get<string>('app.defaultRepository', 'default');
+      try {
+        const repo = await this.repositoryService.findBySlug(defaultSlug);
+        if (repo) data.repository = { connect: { id: repo.id } };
+      } catch {
+        // No default repository - task without repo is OK
+      }
     }
 
-    const publicId = await this.generatePublicId();
-    const task = await this.prisma.task.create({
-      data: {
-        publicId,
-        prompt: dto.prompt,
-        status: WorkflowState.Pending,
-        createdBy: String(dto.telegramUserId ?? 0),
-        opencodeProfile: dto.opencodeProfile ?? null,
-        attachments: JSON.stringify(dto.attachments ?? []),
-        maxRetries: dto.maxRetries ?? 1,
-        repository: { connect: { id: repo.id } },
-      },
-    });
+    const task = await this.prisma.task.create({ data });
 
-    this.logger.log(`Created task ${task.publicId} for repo ${slug}`);
+    this.logger.log(`Created task ${task.publicId}`);
     this.events.emit(AppEvents.TaskCreated, { taskId: task.id, publicId: task.publicId });
     return { id: task.id, publicId: task.publicId };
   }
@@ -53,7 +67,11 @@ export class TaskService {
   async findById(id: string) {
     return this.prisma.task.findUnique({
       where: { id },
-      include: { repository: true, logs: { take: 50, orderBy: { createdAt: 'desc' } } },
+      include: {
+        repository: true,
+        workspace: { include: { projects: true } },
+        logs: { take: 50, orderBy: { createdAt: 'desc' } },
+      },
     });
   }
 
@@ -61,7 +79,7 @@ export class TaskService {
   async findByPublicId(publicId: string) {
     return this.prisma.task.findUnique({
       where: { publicId },
-      include: { repository: true },
+      include: { repository: true, workspace: true },
     });
   }
 
@@ -144,17 +162,18 @@ export class TaskService {
     });
 
     const publicId = await this.generatePublicId();
-    const child = await this.prisma.task.create({
-      data: {
-        publicId,
-        prompt: dto.prompt ?? parent.prompt,
-        status: WorkflowState.Pending,
-        createdBy: parent.createdBy,
+      const child = await this.prisma.task.create({
+        data: {
+          publicId,
+          prompt: dto.prompt ?? parent.prompt,
+          status: WorkflowState.Pending,
+          createdBy: parent.createdBy,
         opencodeProfile: parent.opencodeProfile,
         attachments: parent.attachments,
         maxRetries: parent.maxRetries,
         parentId: parent.id,
-        repository: { connect: { id: parent.repositoryId } },
+        ...(parent.repositoryId ? { repository: { connect: { id: parent.repositoryId } } } : {}),
+        ...(parent.workspaceId ? { workspace: { connect: { id: parent.workspaceId } } } : {}),
       },
     });
 

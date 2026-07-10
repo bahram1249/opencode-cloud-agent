@@ -1,9 +1,5 @@
 import { WorkflowState, WorkflowEvent } from 'src/common/constants/workflow.constants';
 
-/**
- * Transition table for the workflow FSM. Each entry maps
- * (currentState, event) -> nextState. Events not in the table are rejected.
- */
 export const TRANSITIONS: Record<string, Partial<Record<WorkflowEvent, WorkflowState>>> = {
   [WorkflowState.Pending]: {
     [WorkflowEvent.Start]: WorkflowState.Running,
@@ -17,28 +13,34 @@ export const TRANSITIONS: Record<string, Partial<Record<WorkflowEvent, WorkflowS
   },
   [WorkflowState.Coding]: {
     [WorkflowEvent.CodingFinished]: WorkflowState.Testing,
+    [WorkflowEvent.Finish]: WorkflowState.Finished,
     [WorkflowEvent.Cancel]: WorkflowState.Failed,
     [WorkflowEvent.Fail]: WorkflowState.Failed,
   },
   [WorkflowState.Testing]: {
     [WorkflowEvent.BuildFinished]: WorkflowState.WaitingApproval,
     [WorkflowEvent.TestsFailed]: WorkflowState.Failed,
+    [WorkflowEvent.Finish]: WorkflowState.Finished,
+    [WorkflowEvent.ApprovalRequested]: WorkflowState.WaitingApproval,
     [WorkflowEvent.Cancel]: WorkflowState.Failed,
     [WorkflowEvent.Fail]: WorkflowState.Failed,
   },
   [WorkflowState.WaitingApproval]: {
     [WorkflowEvent.Approved]: WorkflowState.Committing,
+    [WorkflowEvent.Finish]: WorkflowState.Finished,
     [WorkflowEvent.Rejected]: WorkflowState.Failed,
     [WorkflowEvent.Cancel]: WorkflowState.Failed,
     [WorkflowEvent.Resume]: WorkflowState.Testing,
   },
   [WorkflowState.Committing]: {
     [WorkflowEvent.CommitFinished]: WorkflowState.Pushing,
+    [WorkflowEvent.Finish]: WorkflowState.Finished,
     [WorkflowEvent.Fail]: WorkflowState.Failed,
     [WorkflowEvent.Cancel]: WorkflowState.Failed,
   },
   [WorkflowState.Pushing]: {
     [WorkflowEvent.PushFinished]: WorkflowState.Finished,
+    [WorkflowEvent.Finish]: WorkflowState.Finished,
     [WorkflowEvent.Fail]: WorkflowState.Failed,
     [WorkflowEvent.Cancel]: WorkflowState.Failed,
   },
@@ -51,10 +53,6 @@ export const TRANSITIONS: Record<string, Partial<Record<WorkflowEvent, WorkflowS
   },
 };
 
-/**
- * Resolve the next state for a given (current, event) pair.
- * Returns null if the transition is not allowed.
- */
 export function resolveTransition(
   current: WorkflowState,
   event: WorkflowEvent,

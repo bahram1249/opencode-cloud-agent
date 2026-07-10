@@ -11,19 +11,9 @@ import { RepositoryService } from '../repository/repository.service';
 import { ConfigService } from '@nestjs/config';
 import type { NotificationPayload } from 'src/common/types';
 
-/**
- * Orchestrates the full task pipeline. Listens for new tasks, drives the FSM
- * through each stage (coding -> testing -> approval -> commit -> push), and
- * notifies Telegram at each step.
- *
- * Flow:
- *   Pending -> Running -> Coding -> Testing -> WaitingApproval
- *          -> Committing -> Pushing -> Finished (or Failed)
- */
 @Injectable()
 export class WorkflowOrchestrator implements OnModuleInit {
   private readonly logger = new Logger(WorkflowOrchestrator.name);
-  /** Pending approvals: taskId -> { chatId, diffSummary } */
   private readonly pendingApprovals = new Map<string, { chatId: string; diffSummary: string }>();
 
   constructor(
@@ -42,9 +32,6 @@ export class WorkflowOrchestrator implements OnModuleInit {
     this.logger.log('Workflow orchestrator initialised');
   }
 
-  /**
-   * Listen for newly created tasks and kick off the workflow.
-   */
   @OnEvent(AppEvents.TaskCreated)
   async handleTaskCreated(payload: { taskId: string; publicId: string }): Promise<void> {
     this.logger.log(`New task received: ${payload.publicId}`);
@@ -53,33 +40,32 @@ export class WorkflowOrchestrator implements OnModuleInit {
     });
   }
 
-  /** Run the full pipeline for a task. */
   async runTask(taskId: string): Promise<void> {
     const task = await this.taskService.findById(taskId);
     if (!task) return;
 
-    const repo = await this.repositoryService.findById(task.repositoryId);
-    if (!repo) {
-      await this.failTask(taskId, 'Repository not found');
-      return;
-    }
-
     const chatId = task.createdBy;
     const timeoutMs = this.config.get<number>('app.taskTimeoutMs', 0);
 
-    try {
-      // ── Pending -> Running ─────────────────────────────────────────
-      await this.engine.fire(taskId, WorkflowEvent.Start);
-      await this.notify(taskId, chatId, 'info', 'Task Started', `Prompt: ${task.prompt}`);
+    // Get the working directory: workspace path > repo path > pwd
+    let cwd = process.cwd();
+    if (task.workspace) {
+      cwd = task.workspace.workDir;
+    } else if (task.repository) {
+      cwd = task.repository.path;
+    }
 
-      // ── Running -> Coding ──────────────────────────────────────────
+    try {
+      await this.engine.fire(taskId, WorkflowEvent.Start);
+      await this.notify(taskId, chatId, 'info', 'Task Started', `Prompt: ${task.prompt}\nWorking dir: ${cwd}`);
+
       await this.engine.fire(taskId, WorkflowEvent.CodingStarted);
       await this.taskService.transition(taskId, WorkflowState.Coding, { startedAt: new Date() });
 
       const openCodeResult = await this.openCodeService.executePrompt({
         taskId,
         prompt: task.prompt,
-        cwd: repo.path,
+        cwd,
         profile: task.opencodeProfile ?? undefined,
         timeoutMs,
       });
@@ -109,106 +95,84 @@ export class WorkflowOrchestrator implements OnModuleInit {
         return;
       }
 
-      // ── Coding -> Testing ──────────────────────────────────────────
       await this.engine.fire(taskId, WorkflowEvent.CodingFinished);
 
-      // Run the build pipeline: install, lint, typecheck, build, test
-      const buildResult = await this.buildService.runPipeline({
-        taskId,
-        cwd: repo.path,
-        installCommand: repo.installCommand ?? undefined,
-        lintCommand: repo.lintCommand ?? undefined,
-        typecheckCommand: repo.typecheckCommand ?? undefined,
-        buildCommand: repo.buildCommand ?? undefined,
-        testCommand: repo.testCommand ?? undefined,
-        timeoutMs,
-      });
-
-      await this.recordBuildExecutions(taskId, buildResult);
-
-      if (!buildResult.success) {
-        await this.engine.fire(taskId, WorkflowEvent.TestsFailed);
-        const failedStage = buildResult.failedStage ?? 'test';
-        const failedOutput = (buildResult as unknown as Record<string, unknown>)[failedStage];
-        await this.failTask(
+      // Run the build pipeline only if a repository is configured with build commands
+      if (task.repository) {
+        const buildResult = await this.buildService.runPipeline({
           taskId,
-          `Build step "${buildResult.failedStage}" failed`,
-          typeof failedOutput === 'object' && failedOutput !== null
-            ? JSON.stringify(failedOutput)
-            : String(failedOutput),
-        );
-        return;
+          cwd,
+          installCommand: task.repository.installCommand ?? undefined,
+          lintCommand: task.repository.lintCommand ?? undefined,
+          typecheckCommand: task.repository.typecheckCommand ?? undefined,
+          buildCommand: task.repository.buildCommand ?? undefined,
+          testCommand: task.repository.testCommand ?? undefined,
+          timeoutMs,
+        });
+
+        await this.recordBuildExecutions(taskId, buildResult);
+
+        if (!buildResult.success) {
+          await this.engine.fire(taskId, WorkflowEvent.TestsFailed);
+          const failedStage = buildResult.failedStage ?? 'test';
+          const failedOutput = (buildResult as unknown as Record<string, unknown>)[failedStage];
+          await this.failTask(
+            taskId,
+            `Build step "${buildResult.failedStage}" failed`,
+            typeof failedOutput === 'object' && failedOutput !== null
+              ? JSON.stringify(failedOutput)
+              : String(failedOutput),
+          );
+          return;
+        }
+      } else {
+        this.logger.log(`Task ${task.publicId}: no repository configured, skipping build pipeline`);
       }
 
-      // ── Testing -> WaitingApproval ─────────────────────────────────
-      // Generate diff and ask for approval
-      const diff = await this.gitService.getChangedFiles(repo.path);
-      const diffSummary = this.summarizeDiff(diff);
-      await this.engine.fire(taskId, WorkflowEvent.ApprovalRequested);
+      // ── Testing -> WaitingApproval (only if repo configured with approval policy) ──
+      if (task.repository && task.repository.approvalPolicy !== 'skip') {
+        await this.engine.fire(taskId, WorkflowEvent.ApprovalRequested);
+        await this.notify(taskId, chatId, 'info', 'OpenCode Task Finished', 'OpenCode has finished making changes. Use /git diff to review changes, then /git commit and /git push manually.', []);
 
-      if (repo.approvalPolicy === 'auto') {
-        // Auto-approve: skip waiting
-        await this.approveTask(taskId, chatId);
+        // Mark as finished since git is now manual
+        await this.engine.fire(taskId, WorkflowEvent.Finish);
+        await this.taskService.transition(taskId, WorkflowState.Finished, { finishedAt: new Date() });
+        await this.notify(taskId, chatId, 'success', 'Task Finished', 'OpenCode completed. Use /git commands to review, commit, and push changes.');
+        this.events.emit(AppEvents.TaskFinished, { taskId, publicId: task.publicId });
       } else {
-        await this.notify(taskId, chatId, 'info', 'Approval Required', diffSummary, [
-          { label: '✅ Approve', action: 'approve', data: { taskId } },
-          { label: '❌ Reject', action: 'reject', data: { taskId } },
-        ]);
-        this.pendingApprovals.set(taskId, { chatId, diffSummary });
+        // No approval needed, finish immediately
+        await this.engine.fire(taskId, WorkflowEvent.Finish);
+        await this.taskService.transition(taskId, WorkflowState.Finished, { finishedAt: new Date() });
+        await this.notify(taskId, chatId, 'success', 'Task Finished', 'OpenCode completed successfully.');
+        this.events.emit(AppEvents.TaskFinished, { taskId, publicId: task.publicId });
       }
     } catch (err) {
       await this.failTask(taskId, (err as Error).message);
     }
   }
 
-  /** Approve a waiting task and proceed to commit + push. */
+  /** Legacy approve — kept for backward compat but git is now manual. */
   async approveTask(taskId: string, _chatId: string): Promise<void> {
     const task = await this.taskService.findById(taskId);
     if (!task) return;
-    const repo = await this.repositoryService.findById(task.repositoryId);
-    if (!repo) return;
 
     const chatId = _chatId || task.createdBy;
     this.pendingApprovals.delete(taskId);
 
     try {
-      // ── WaitingApproval -> Committing ───────────────────────────────
       await this.engine.fire(taskId, WorkflowEvent.Approved);
-
-      const branchName = `opencode/task-${task.publicId}`;
-      await this.gitService.createBranch(repo.path, branchName);
-      await this.taskService.transition(taskId, WorkflowState.Committing, { branch: branchName });
-
-      const commitMessage = this.generateCommitMessage(task.prompt, task.publicId);
-      const commit = await this.gitService.commit(repo.path, commitMessage);
-      await this.taskService.transition(taskId, WorkflowState.Committing, { commitSha: commit.sha });
-
-      await this.notify(taskId, chatId, 'info', 'Committed', `SHA: ${commit.sha.slice(0, 7)}`);
-
-      // ── Committing -> Pushing ───────────────────────────────────────
-      await this.engine.fire(taskId, WorkflowEvent.CommitFinished);
-      await this.gitService.push(repo.path, branchName);
-      await this.taskService.transition(taskId, WorkflowState.Pushing);
-
-      // ── Pushing -> Finished ─────────────────────────────────────────
-      await this.engine.fire(taskId, WorkflowEvent.PushFinished);
+      await this.engine.fire(taskId, WorkflowEvent.Finish);
       await this.taskService.transition(taskId, WorkflowState.Finished, { finishedAt: new Date() });
-
       await this.notify(
-        taskId,
-        chatId,
-        'success',
-        'Task Finished',
-        `Branch: ${branchName}\nCommit: ${commit.sha.slice(0, 7)}`,
+        taskId, chatId, 'success', 'Task Approved',
+        'OpenCode task approved. Use /git commands to review, commit, and push.',
       );
-
       this.events.emit(AppEvents.TaskFinished, { taskId, publicId: task.publicId });
     } catch (err) {
-      await this.failTask(taskId, `Commit/Push failed: ${(err as Error).message}`);
+      await this.failTask(taskId, `Approval failed: ${(err as Error).message}`);
     }
   }
 
-  /** Reject a waiting task. */
   async rejectTask(taskId: string, chatId: string): Promise<void> {
     this.pendingApprovals.delete(taskId);
     await this.engine.fire(taskId, WorkflowEvent.Rejected);
@@ -219,7 +183,6 @@ export class WorkflowOrchestrator implements OnModuleInit {
     await this.notify(taskId, chatId, 'warn', 'Task Rejected', 'Changes were not committed.');
   }
 
-  /** Cancel a running task. */
   async cancelTask(taskId: string): Promise<void> {
     const task = await this.taskService.findById(taskId);
     if (!task) return;
@@ -231,15 +194,12 @@ export class WorkflowOrchestrator implements OnModuleInit {
     });
   }
 
-  /** Resume a failed/finished task by re-queuing it. */
   async resumeTask(taskId: string): Promise<void> {
     await this.engine.fire(taskId, WorkflowEvent.Resume);
     await this.taskService.transition(taskId, WorkflowState.Pending);
-    // Re-run the pipeline
     await this.runTask(taskId);
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────
   private async failTask(taskId: string, message: string, details?: string): Promise<void> {
     const task = await this.taskService.findById(taskId);
     if (!task) return;
@@ -273,19 +233,6 @@ export class WorkflowOrchestrator implements OnModuleInit {
       body,
       buttons,
     });
-  }
-
-  private summarizeDiff(diff: { files: string[]; stat: string }): string {
-    if (diff.files.length === 0) {
-      return 'No changes detected.';
-    }
-    const fileList = diff.files.map((f) => `  • ${f}`).join('\n');
-    return `Changed files (${diff.files.length}):\n${fileList}`;
-  }
-
-  private generateCommitMessage(prompt: string, publicId: string): string {
-    const shortPrompt = prompt.length > 72 ? prompt.slice(0, 72) + '...' : prompt;
-    return `feat(opencode): ${shortPrompt}\n\nGenerated by OpenCode Orchestrator (task: ${publicId})`;
   }
 
   private async recordBuildExecutions(

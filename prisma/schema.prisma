@@ -10,26 +10,62 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// A git repository that the orchestrator can operate on.
+/// A workspace is a working directory (may or may not be a git repo).
+/// Workspaces can contain multiple git projects and are the primary
+/// context for OpenCode sessions.
+model Workspace {
+  id        String   @id @default(cuid())
+  /// Human-readable name used in Telegram commands.
+  name      String   @unique
+  /// Absolute path to the workspace working directory.
+  workDir   String
+  /// Whether this is the currently active workspace.
+  active    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects  WorkspaceProject[]
+  tasks     Task[]
+  sessions  OpenCodeSession[]
+}
+
+/// A git project within a workspace. Git is independent of OpenCode tasks.
+model WorkspaceProject {
+  id          String   @id @default(cuid())
+  workspaceId String
+  /// Short display name, e.g. "backend", "frontend"
+  name        String
+  /// Absolute path to the git project directory.
+  gitPath     String
+  /// Default branch.
+  branch      String   @default("main")
+  /// Remote URL (inferred from git remote if empty).
+  remoteUrl   String?
+  /// Whether this project is enabled.
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+}
+
+/// A git repository that the orchestrator can operate on (legacy, kept for
+/// backward-compatibility with the current workflow-based pipeline).
 model Repository {
   id            String   @id @default(cuid())
-  /// Human-readable slug used in Telegram commands and config (unique).
   slug          String   @unique
   name          String
-  /// Absolute path to the repository working tree on disk.
   path          String
-  /// Default working branch the orchestrator branches off from.
   branch        String   @default("main")
   buildCommand  String?  @default("npm run build")
   testCommand   String?  @default("npm test")
   lintCommand   String?  @default("npm run lint")
   typecheckCommand String? @default("npm run typecheck")
   installCommand String? @default("npm install")
-  /// Whether a human must approve the commit/push step.
   approvalPolicy String  @default("required")
-  /// Optional remote URL override (otherwise inferred from git remote).
   remoteUrl     String?
-  /// Whether the repository is enabled for new tasks.
   enabled       Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -55,48 +91,78 @@ model Configuration {
   @@index([scope])
 }
 
+/// A session represents an interactive OpenCode process that stays alive
+/// across multiple user inputs.
+model OpenCodeSession {
+  id        String   @id @default(cuid())
+  /// Short public id (e.g. s-8K3a).
+  publicId  String   @unique
+  /// Telegram user id that owns this session.
+  createdBy String
+  /// Workspace context.
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /// Active prompt / description of what's being worked on.
+  prompt    String
+  /// Whether the session is active (process running).
+  active    Boolean  @default(true)
+  /// Whether to stream output to Telegram automatically.
+  streaming Boolean  @default(true)
+  /// Telegram chat id for streaming output.
+  chatId    String?
+  /// Telegram message id for the streaming output message (edited live).
+  streamMessageId Int?
+  /// Pid of the child process (for diagnostics).
+  pid       Int?
+  /// Accumulated stdout so far.
+  output    String   @default("")
+  /// Error message if the session failed.
+  errorMessage String?
+  /// Total duration in ms.
+  durationMs Int?
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+  @@index([createdBy])
+}
+
 /// A natural-language request turned into an executable task.
 model Task {
   id        String   @id @default(cuid())
-  /// Short public id exposed to Telegram (e.g. t-8K3a).
   publicId  String   @unique
-  /// The user-supplied natural language prompt.
   prompt    String
-  /// Optional file/screenshot attachment paths (JSON array).
   attachments String? @default("[]")
-  /// Current finite-state-machine state. See WorkflowState.
   status    String   @default("pending")
-  /// Telegram user id that created the task.
   createdBy String
-  /// OpenCode profile name to use for this task.
   opencodeProfile String?
-  /// Git branch created/used for the task.
   branch   String?
-  /// Commit SHA once committed.
   commitSha String?
-  /// Tag name once tagged.
   tagName   String?
-  /// Failure reason when status = failed.
   errorMessage String?
-  /// Number of automatic retries performed.
   retryCount Int    @default(0)
-  /// Maximum retries allowed.
   maxRetries Int    @default(1)
-  /// Parent task id when this task is a retry.
   parentId  String?
   startedAt DateTime?
   finishedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  repositoryId String
-  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  /// Optional workspace context.
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  /// Optional repository context (legacy workflow pipeline).
+  repositoryId String?
+  repository   Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
 
   logs        TaskLog[]
   executions  Execution[]
 
   @@index([status])
   @@index([repositoryId])
+  @@index([workspaceId])
   @@index([createdBy])
 }
 

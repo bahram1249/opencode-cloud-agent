@@ -5,14 +5,9 @@ import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
 import { NotificationService } from 'src/modules/notification/notification.service';
 import type { Update } from 'telegraf/types';
 import type { Context } from 'telegraf';
-import { CALLBACK_ACTIONS } from './commands/commands.constants';
 import { TaskService } from 'src/modules/task/task.service';
 import { WorkflowOrchestrator } from 'src/modules/workflow/workflow-orchestrator.service';
 
-/**
- * Registers all bot command handlers and callback query (inline keyboard)
- * handlers on the Telegraf bot. Runs on module init, stops on destroy.
- */
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
@@ -36,12 +31,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Initialising Telegram bot...');
     void this.botService
       .setCommands()
-      .then(() => {
-        return this.botService.start();
-      })
-      .then(() => {
-        this.logger.log('Telegram service initialised');
-      })
+      .then(() => this.botService.start())
+      .then(() => { this.logger.log('Telegram service initialised'); })
       .catch((err: unknown) => {
         this.logger.error('Telegram bot startup failed');
         this.logger.error((err as Error).message);
@@ -52,7 +43,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.botService.stop();
   }
 
-  /** Handle a raw update (from webhook controller). */
   async handleUpdate(update: Update): Promise<void> {
     await this.botService.handleUpdate(update);
   }
@@ -60,71 +50,146 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private registerCommands(): void {
     const bot = this.botService.bot;
 
-    bot.command('new', async (ctx) => {
+    // ── Session ────────────────────────────────────────────────────
+    bot.command('session', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = ctx.message && 'text' in ctx.message
-        ? ctx.message.text.split(/\s+/).slice(1)
-        : [];
-      await this.handler.handleNew(this.toContext(ctx), args);
+      await this.handler.handleStartSessionCmd(
+        this.toContext(ctx),
+        this.getArgs(ctx),
+      );
     });
 
-    bot.command('repos', async (ctx) => {
+    bot.command('send', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleRepos(this.toContext(ctx));
-    });
-
-    bot.command('status', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleStatus(this.toContext(ctx), args);
-    });
-
-    bot.command('tasks', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleTasks(this.toContext(ctx));
+      await this.handler.handleSendCmd(this.toContext(ctx), this.getArgs(ctx));
     });
 
     bot.command('cancel', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleCancel(this.toContext(ctx), args);
+      await this.handler.handleCancelCmd(this.toContext(ctx), this.getArgs(ctx));
     });
 
+    // ── Workspace & Projects ───────────────────────────────────────
+    bot.command('workspace', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleWorkspaceCmd(
+        this.toContext(ctx),
+        this.getArgs(ctx),
+      );
+    });
+
+    bot.command('project', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      const args = this.getArgs(ctx);
+      if (args.length === 0) {
+        // Show active workspace projects
+        await this.handler.handleWorkspaceCmd(this.toContext(ctx), ['show']);
+      } else {
+        await this.handler.handleWorkspaceCmd(this.toContext(ctx), args);
+      }
+    });
+
+    // ── Sessions ────────────────────────────────────────────────────
+    bot.command('sessions', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSessionsCmd(this.toContext(ctx));
+    });
+
+    // ── Git ────────────────────────────────────────────────────────
+    bot.command('git', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleGitCmd(this.toContext(ctx), this.getArgs(ctx));
+    });
+
+    // ── OpenCode control ───────────────────────────────────────────
+    bot.command('opencode', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSendCmd(this.toContext(ctx), this.getArgs(ctx));
+    });
+
+    bot.command('model', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSendCmd(
+        this.toContext(ctx),
+        ['/model', ...this.getArgs(ctx)],
+      );
+    });
+
+    bot.command('skill', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSendCmd(
+        this.toContext(ctx),
+        ['/skill', ...this.getArgs(ctx)],
+      );
+    });
+
+    // ── Terminal interaction keys ──────────────────────────────────
+    bot.command('tab', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleKeyCmd(this.toContext(ctx), 'tab');
+    });
+    bot.command('enter', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleKeyCmd(this.toContext(ctx), 'enter');
+    });
+    bot.command('up', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleKeyCmd(this.toContext(ctx), 'up');
+    });
+    bot.command('down', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleKeyCmd(this.toContext(ctx), 'down');
+    });
+    bot.command('ctrl_c', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleKeyCmd(this.toContext(ctx), 'ctrl+c');
+    });
+
+    // ── Legacy commands ────────────────────────────────────────────
+    bot.command('new', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleNew(this.toContext(ctx), this.getArgs(ctx));
+    });
+    bot.command('status', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleStatus(this.toContext(ctx), this.getArgs(ctx));
+    });
+    bot.command('tasks', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleTasks(this.toContext(ctx));
+    });
+    bot.command('repos', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleRepos(this.toContext(ctx));
+    });
     bot.command('resume', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleResume(this.toContext(ctx), args);
+      await this.handler.handleResume(this.toContext(ctx), this.getArgs(ctx));
     });
-
     bot.command('logs', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleLogs(this.toContext(ctx), args);
+      await this.handler.handleLogs(this.toContext(ctx), this.getArgs(ctx));
     });
-
     bot.command('diff', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleDiff(this.toContext(ctx), args);
+      await this.handler.handleDiff(this.toContext(ctx), this.getArgs(ctx));
     });
-
     bot.command('approve', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleApprove(this.toContext(ctx), args);
+      await this.handler.handleApprove(this.toContext(ctx), this.getArgs(ctx));
     });
-
     bot.command('reject', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      await this.handler.handleReject(this.toContext(ctx), args);
+      await this.handler.handleReject(this.toContext(ctx), this.getArgs(ctx));
     });
 
+    // ── Help ───────────────────────────────────────────────────────
     bot.command('help', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
       await this.handler.handleHelp(this.toContext(ctx));
     });
 
+    // ── Plain text → session ───────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-deprecated
     bot.on('text', async (ctx: Context) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
@@ -132,7 +197,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!msg || !('text' in msg)) return;
       const text = msg.text;
       if (text.startsWith('/')) return;
-      await this.handler.handleNew(this.toContext(ctx), text.split(/\s+/));
+
+      const chatId = String(ctx.chat?.id ?? 0);
+      const userId = String(ctx.from?.id ?? 0);
+
+      await this.handler.handleTextInput(chatId, userId, text);
     });
   }
 
@@ -142,40 +211,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.action(/.*/, async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
 
-      const data = ctx.callbackQuery && 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : '';
-      let parsed: Record<string, string>;
-      try {
-        parsed = JSON.parse(data) as Record<string, string>;
-      } catch {
-        this.logger.warn(`Invalid callback data: ${data}`);
-        return;
-      }
+      const data =
+        ctx.callbackQuery && 'data' in ctx.callbackQuery
+          ? ctx.callbackQuery.data
+          : '';
 
-      const action = parsed.a ?? '';
-      const taskId = parsed['taskId'] ?? '';
+      const chatId = String(ctx.chat?.id ?? 0);
+      const userId = String(ctx.from?.id ?? 0);
 
-      switch (action) {
-        case CALLBACK_ACTIONS.APPROVE:
-          await ctx.answerCbQuery('Approved');
-          await this.workflowOrchestrator.approveTask(taskId, String(ctx.from?.id ?? 0));
-          break;
-        case CALLBACK_ACTIONS.REJECT:
-          await ctx.answerCbQuery('Rejected');
-          await this.workflowOrchestrator.rejectTask(taskId, String(ctx.from?.id ?? 0));
-          break;
-        case CALLBACK_ACTIONS.CANCEL:
-          await ctx.answerCbQuery('Cancelling...');
-          await this.workflowOrchestrator.cancelTask(taskId);
-          break;
-        default:
-          await ctx.answerCbQuery('Unknown action');
-      }
+      // Route all structured callbacks through the handler
+      await this.handler.handleCallback(chatId, userId, data);
+      await ctx.answerCbQuery().catch(() => {});
     });
   }
 
   private isAuthorized(userId: number | undefined): boolean {
     if (!userId) return false;
-    // Delegate to guard logic — check authorized users set from config
     return this.guard.canActivate({
       switchToRpc: () => ({ getContext: () => ({ from: { id: userId } }) }),
     } as never);

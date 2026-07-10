@@ -1,5 +1,15 @@
 import { registerAs } from '@nestjs/config';
+import { execSync } from 'node:child_process';
 import { LogLevel, parseAuthorizedUsers } from './environment.validation';
+
+function resolveBinary(name: string): string {
+  if (name.includes('/')) return name;
+  try {
+    return execSync(`which ${name}`, { encoding: 'utf-8' }).trim();
+  } catch {
+    return name;
+  }
+}
 
 /**
  * Centralised application configuration object. Inject via `ConfigService` /
@@ -26,7 +36,7 @@ export const appConfig = registerAs('app', (): AppConfig => {
   const authorizedUsersRaw = process.env['AUTHORIZED_USERS'] ?? '';
   return {
     botToken: process.env['BOT_TOKEN'] ?? '',
-    opencodePath: process.env['OPENCODE_PATH'] ?? 'opencode',
+    opencodePath: resolveBinary(process.env['OPENCODE_PATH'] ?? 'opencode'),
     redisUrl: process.env['REDIS_URL'] ?? 'redis://localhost:6379',
     githubToken: process.env['GITHUB_TOKEN'] ?? '',
     defaultRepository: process.env['DEFAULT_REPOSITORY'] ?? 'default',

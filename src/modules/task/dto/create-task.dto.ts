@@ -18,6 +18,11 @@ export class CreateTaskDto {
   @Length(1, 10000)
   prompt!: string;
 
+  @ApiPropertyOptional({ description: 'Workspace id to operate in' })
+  @IsString()
+  @IsOptional()
+  workspaceId?: string;
+
   @ApiPropertyOptional({ description: 'Repository slug to operate on', example: 'my-project' })
   @IsString()
   @IsOptional()

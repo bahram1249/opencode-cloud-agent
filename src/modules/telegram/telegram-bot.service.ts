@@ -3,10 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { Telegraf } from 'telegraf';
 import type { Update } from 'telegraf/types';
 
-/**
- * Manages the Telegraf bot instance and the webhook/polling lifecycle.
- * Provides access to the bot for sending messages and handling updates.
- */
 @Injectable()
 export class TelegramBotService {
   private readonly logger = new Logger(TelegramBotService.name);
@@ -25,15 +21,6 @@ export class TelegramBotService {
     });
   }
 
-  /**
-   * Start the bot. Returns quickly — does NOT await the long-running
-   * polling/webhook loop.
-   *
-   * In webhook mode, sets the webhook URL via Telegram API.
-   * In polling mode, calls `bot.launch()` which starts an internal polling
-   * loop that runs indefinitely. The promise from `launch()` never resolves
-   * (by design), so we fire it in the background.
-   */
   async start(): Promise<void> {
     if (this.started) return;
 
@@ -59,10 +46,6 @@ export class TelegramBotService {
     }
   }
 
-  /**
-   * Start long-polling in the background. `bot.launch()` runs a
-   * `getUpdates` loop that never resolves — it must NOT be awaited.
-   */
   private startPolling(): void {
     this.logger.log('Starting bot in polling mode (background)...');
     void this.bot
@@ -76,7 +59,6 @@ export class TelegramBotService {
       });
   }
 
-  /** Stop the bot. */
   stop(): void {
     if (!this.started) return;
     try {
@@ -87,31 +69,33 @@ export class TelegramBotService {
     this.started = false;
   }
 
-  /** Handle a raw update from a webhook POST. */
   async handleUpdate(update: Update): Promise<void> {
     await this.bot.handleUpdate(update);
   }
 
-  /** Get the bot info. */
   async getBotInfo() {
     return this.bot.telegram.getMe();
   }
 
-  /** Register bot commands with Telegram (for autocomplete). */
   async setCommands(): Promise<void> {
     this.logger.log('Setting bot commands...');
     try {
       await this.bot.telegram.setMyCommands([
-        { command: 'new', description: 'Start a new task' },
-        { command: 'repos', description: 'List repositories' },
-        { command: 'status', description: 'Task status' },
-        { command: 'tasks', description: 'List tasks' },
-        { command: 'cancel', description: 'Cancel a task' },
-        { command: 'resume', description: 'Resume a task' },
-        { command: 'logs', description: 'Get task logs' },
-        { command: 'diff', description: 'Get git diff' },
-        { command: 'approve', description: 'Approve a task' },
-        { command: 'reject', description: 'Reject a task' },
+        { command: 'session', description: 'Start interactive session — /session <prompt>' },
+        { command: 'send', description: 'Send text to active session — /send <text>' },
+        { command: 'sessions', description: 'List / switch sessions — /sessions' },
+        { command: 'cancel', description: 'Cancel active session — /cancel' },
+        { command: 'tab', description: 'Send Tab key (completion) — /tab' },
+        { command: 'enter', description: 'Send Enter (confirm) — /enter' },
+        { command: 'up', description: 'Arrow Up — /up' },
+        { command: 'down', description: 'Arrow Down — /down' },
+        { command: 'ctrl_c', description: 'Interrupt (Ctrl+C) — /ctrl_c' },
+        { command: 'workspace', description: 'Manage workspaces — /workspace <action>' },
+        { command: 'project', description: 'Manage git projects — /project <action>' },
+        { command: 'git', description: 'Git operations — /git <subcommand>' },
+        { command: 'opencode', description: 'Send raw OpenCode command — /opencode <args>' },
+        { command: 'model', description: 'Switch model — /model <name>' },
+        { command: 'skill', description: 'Load skill — /skill <name>' },
         { command: 'help', description: 'Show help' },
       ]);
       this.logger.log('Bot commands set successfully');

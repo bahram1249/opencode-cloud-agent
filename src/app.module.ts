@@ -21,6 +21,10 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { RepositoryModule } from './modules/repository/repository.module';
 import { ConfigurationModule } from './modules/configuration/configuration.module';
 import { PromptTemplateModule } from './modules/prompt-template/prompt-template.module';
+import { WorkspaceModule } from './modules/workspace/workspace.module';
+import { SessionModule } from './modules/session/session.module';
+import { StreamModule } from './modules/stream/stream.module';
+import { GitCommandsModule } from './modules/git-commands/git-commands.module';
 import { QueueModule } from './queues/queue.module';
 
 @Module({
@@ -61,6 +65,12 @@ import { QueueModule } from './queues/queue.module';
     BuildModule,
     NotificationModule,
     TelegramModule,
+
+    // ── New modules (workspace, sessions, streaming, git commands) ──
+    WorkspaceModule,
+    SessionModule,
+    StreamModule,
+    GitCommandsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
