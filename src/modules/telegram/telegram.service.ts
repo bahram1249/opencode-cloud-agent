@@ -5,8 +5,6 @@ import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
 import { NotificationService } from 'src/modules/notification/notification.service';
 import type { Update } from 'telegraf/types';
 import type { Context } from 'telegraf';
-import { TaskService } from 'src/modules/task/task.service';
-import { WorkflowOrchestrator } from 'src/modules/workflow/workflow-orchestrator.service';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -17,8 +15,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly handler: TelegramCommandHandler,
     private readonly guard: TelegramAuthGuard,
     private readonly notificationService: NotificationService,
-    private readonly taskService: TaskService,
-    private readonly workflowOrchestrator: WorkflowOrchestrator,
   ) {}
 
   onModuleInit(): void {
@@ -137,44 +133,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.command('ctrl_c', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
       await this.handler.handleKeyCmd(this.toContext(ctx), 'ctrl+c');
-    });
-
-    // ── Legacy commands ────────────────────────────────────────────
-    bot.command('new', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleNew(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('status', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleStatus(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('tasks', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleTasks(this.toContext(ctx));
-    });
-    bot.command('repos', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleRepos(this.toContext(ctx));
-    });
-    bot.command('resume', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleResume(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('logs', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleLogs(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('diff', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleDiff(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('approve', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleApprove(this.toContext(ctx), this.getArgs(ctx));
-    });
-    bot.command('reject', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleReject(this.toContext(ctx), this.getArgs(ctx));
     });
 
     // ── Help ───────────────────────────────────────────────────────

@@ -68,20 +68,6 @@ export class NotificationService {
     }
   }
 
-  /** Send a file (e.g. log output) as a document. */
-  async sendDocument(chatId: string, filename: string, content: string): Promise<void> {
-    if (!this.bot) return;
-    try {
-      await this.bot.telegram.sendDocument(
-        chatId,
-        { source: Buffer.from(content, 'utf-8'), filename },
-        { caption: filename },
-      );
-    } catch (err) {
-      this.logger.error(`Failed to send document: ${(err as Error).message}`);
-    }
-  }
-
   private formatMessage(payload: NotificationPayload, emoji: string): string {
     const lines: string[] = [];
     lines.push(`${emoji} <b>${html.escape(payload.title)}</b>`);

@@ -475,38 +475,6 @@ export class SessionService {
     return [...this.sessions.values()].filter((s) => s.createdBy === telegramUserId);
   }
 
-  getAllActiveSessions(): ActiveSession[] {
-    return [...this.sessions.values()].filter((s) => s.running);
-  }
-
-  async listSessions(query: {
-    active?: boolean;
-    createdBy?: string;
-    page?: number;
-    pageSize?: number;
-  }) {
-    const page = query.page ?? 1;
-    const pageSize = query.pageSize ?? 20;
-    const skip = (page - 1) * pageSize;
-
-    const where: Record<string, unknown> = {};
-    if (query.active !== undefined) where.active = query.active;
-    if (query.createdBy) where.createdBy = query.createdBy;
-
-    const [items, total] = await Promise.all([
-      this.prisma.openCodeSession.findMany({
-        where,
-        skip,
-        take: pageSize,
-        orderBy: { createdAt: 'desc' },
-        include: { workspace: { select: { name: true, workDir: true } } },
-      }),
-      this.prisma.openCodeSession.count({ where }),
-    ]);
-
-    return { items, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
-  }
-
   private async generatePublicId(): Promise<string> {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     for (let attempt = 0; attempt < 10; attempt++) {

@@ -73,10 +73,6 @@ export class TelegramBotService {
     await this.bot.handleUpdate(update);
   }
 
-  async getBotInfo() {
-    return this.bot.telegram.getMe();
-  }
-
   async setCommands(): Promise<void> {
     this.logger.log('Setting bot commands...');
     try {

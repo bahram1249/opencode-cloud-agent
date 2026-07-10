@@ -1,16 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Markup } from 'telegraf';
 import type { TelegramContext } from './telegram.types';
-import { TaskService } from 'src/modules/task/task.service';
-import { WorkflowOrchestrator } from 'src/modules/workflow/workflow-orchestrator.service';
-import { RepositoryService } from 'src/modules/repository/repository.service';
 import { NotificationService } from 'src/modules/notification/notification.service';
 import { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import { SessionService, type ActiveSession } from 'src/modules/session/session.service';
 import { StreamService } from 'src/modules/stream/stream.service';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
-import { ConfigService } from '@nestjs/config';
-import { WorkflowState } from 'src/common/constants/workflow.constants';
 
 /** Helper: build callback data JSON string. */
 function cb(t: string, v?: string): string {
@@ -33,15 +28,11 @@ export class TelegramCommandHandler {
   private readonly logger = new Logger(TelegramCommandHandler.name);
 
   constructor(
-    private readonly taskService: TaskService,
-    private readonly repositoryService: RepositoryService,
-    private readonly workflowOrchestrator: WorkflowOrchestrator,
     private readonly notificationService: NotificationService,
     private readonly workspaceService: WorkspaceService,
     private readonly sessionService: SessionService,
     private readonly streamService: StreamService,
     private readonly gitCommandsService: GitCommandsService,
-    private readonly config: ConfigService,
   ) {}
 
   // ===================================================================
@@ -53,12 +44,14 @@ export class TelegramCommandHandler {
     const action = parseCb(data);
     if (!action) return;
 
-    const [namespace] = action.t.split(':');
+    const parts = action.t.split(':');
+    const namespace = parts[0];
+    const navTarget = parts.slice(1).join(':');
     const value = action.v;
 
     switch (namespace) {
       case 'nav':
-        await this.handleNav(chatId, userId, value);
+        await this.handleNav(chatId, userId, navTarget);
         break;
       case 'ws':
         await this.handleWSCallback(chatId, userId, action.t, value);
@@ -713,6 +706,10 @@ export class TelegramCommandHandler {
         await this.showMainMenu(chatId, userId);
         break;
       }
+      case 'ws:addproj': {
+        await this.notificationService.sendRaw(chatId, 'Use /project add <name> <git-path> to add a project to this workspace.');
+        break;
+      }
       default:
         await this.showWorkspaceMenu(chatId);
     }
@@ -935,112 +932,6 @@ export class TelegramCommandHandler {
     );
   }
 
-  // ===================================================================
-  //  LEGACY HANDLERS (keep for backward compat)
-  // ===================================================================
-
-  async handleNew(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const prompt = args.join(' ').trim();
-    if (!prompt) {
-      await this.notificationService.sendRaw(chatId, 'Usage: /new <prompt>\nOr just type your prompt directly to start a session.');
-      return;
-    }
-    await this.handleTextInput(chatId, String(ctx.from?.id ?? 0), prompt);
-  }
-
-  async handleRepos(ctx: TelegramContext): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const repos = await this.repositoryService.findAll({ enabled: true });
-    if (repos.length === 0) {
-      await this.notificationService.sendRaw(chatId, 'No legacy repositories.');
-      return;
-    }
-    const list = repos.map((r) => `• ${r.slug} — ${r.path}`).join('\n');
-    await this.notificationService.sendRaw(chatId, `Legacy repos:\n${list}`);
-  }
-
-  async handleStatus(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) {
-      await this.notificationService.sendRaw(chatId, 'Usage: /status <taskId>');
-      return;
-    }
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task) {
-      await this.notificationService.sendRaw(chatId, `Task ${publicId} not found.`);
-      return;
-    }
-    await this.notificationService.sendRaw(chatId, `Task ${task.publicId}: ${task.status}`);
-  }
-
-  async handleTasks(ctx: TelegramContext): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const { items } = await this.taskService.listTasks({ page: 1, pageSize: 5 });
-    if (items.length === 0) {
-      await this.notificationService.sendRaw(chatId, 'No tasks.');
-      return;
-    }
-    const list = items.map((t) => `• ${t.publicId} [${t.status}] ${t.prompt?.slice(0, 60)}`).join('\n');
-    await this.notificationService.sendRaw(chatId, `Tasks:\n${list}`);
-  }
-
-  async handleApprove(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) return;
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task || task.status !== (WorkflowState.WaitingApproval as string)) {
-      await this.notificationService.sendRaw(chatId, 'Not awaiting approval.');
-      return;
-    }
-    await this.workflowOrchestrator.approveTask(task.id, String(ctx.from?.id ?? 0));
-    await this.notificationService.sendRaw(chatId, `Approved ${publicId}`);
-  }
-
-  async handleReject(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) return;
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task || task.status !== (WorkflowState.WaitingApproval as string)) return;
-    await this.workflowOrchestrator.rejectTask(task.id, String(ctx.from?.id ?? 0));
-    await this.notificationService.sendRaw(chatId, `Rejected ${publicId}`);
-  }
-
-  async handleResume(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) return;
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task) return;
-    await this.workflowOrchestrator.resumeTask(task.id);
-    await this.notificationService.sendRaw(chatId, `Resumed ${publicId}`);
-  }
-
-  async handleLogs(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) return;
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task) return;
-    const logs = await this.taskService.getLogs(task.id, 20);
-    const text = logs.map((l) => `[${l.level}] ${l.message}`).join('\n');
-    await this.notificationService.sendRaw(chatId, text || 'No logs.');
-  }
-
-  async handleDiff(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const publicId = args[0];
-    if (!publicId) return;
-    const task = await this.taskService.findByPublicId(publicId);
-    if (!task) return;
-    const executions = await this.taskService.getExecutions(task.id);
-    const gitExec = executions.find((e) => e.stage === 'git');
-    await this.notificationService.sendRaw(chatId, gitExec?.stdout?.slice(0, 3500) || 'No diff.');
-  }
-
   async handleHelp(ctx: TelegramContext): Promise<void> {
     const chatId = String(ctx.chat?.id ?? 0);
     await this.notificationService.sendRaw(chatId,
@@ -1056,24 +947,23 @@ export class TelegramCommandHandler {
       '/sessions — List / switch sessions',
       '/cancel — Cancel session',
       '',
-      '*Terminal Keys (for interactive prompts)*',
-      '/tab — Tab (autocomplete / next option)',
-      '/enter — Enter (confirm selection)',
-      '/up — Arrow Up (previous option)',
-      '/down — Arrow Down (next option)',
+      '*Terminal Keys*',
+      '/tab — Tab (autocomplete)',
+      '/enter — Enter (confirm)',
+      '/up — Arrow Up',
+      '/down — Arrow Down',
       '/ctrl_c — Interrupt (Ctrl+C)',
       '',
       '*OpenCode Control*',
       '/model <name> — Switch model',
       '/skill <name> — Load skill',
-      '/opencode <args> — Raw OpenCode command',
       '',
       '*Git*',
       '/git status/diff/add/commit/push/pull/log',
       '',
       '*Workspace*',
       '/workspace create/list/switch/show',
-      '/project add/list/remove',
+      '/project add/list/edit/delete',
       ].join('\n'),
     );
   }
@@ -1114,13 +1004,5 @@ export class TelegramCommandHandler {
     } catch (err) {
       await this.notificationService.sendRaw(chatId, `Key error: ${(err as Error).message}`);
     }
-  }
-
-  // ===================================================================
-  //  UTILITY
-  // ===================================================================
-
-  hasActiveSession(userId: string): boolean {
-    return this.sessionService.getUserSession(userId) !== undefined;
   }
 }

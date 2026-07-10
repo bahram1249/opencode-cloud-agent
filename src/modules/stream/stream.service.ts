@@ -158,13 +158,6 @@ export class StreamService {
     this.sessions.delete(sessionPublicId);
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
-    if (!this.bot) return;
-    try {
-      await this.bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
-    } catch { /* ignore */ }
-  }
-
   private esc(text: string): string {
     return text
       .replace(/&/g, '&amp;')

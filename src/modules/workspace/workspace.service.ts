@@ -38,7 +38,7 @@ export class WorkspaceService {
   async findAll() {
     return this.prisma.workspace.findMany({
       orderBy: { name: 'asc' },
-      include: { projects: true, _count: { select: { tasks: true, sessions: true } } },
+      include: { projects: true, _count: { select: { sessions: true } } },
     });
   }
 

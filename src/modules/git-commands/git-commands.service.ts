@@ -48,14 +48,6 @@ export class GitCommandsService {
     return this.git(cwd, args);
   }
 
-  async diffStaged(cwd: string): Promise<string> {
-    return this.git(cwd, ['diff', '--cached', '--no-color']);
-  }
-
-  async diffStat(cwd: string): Promise<string> {
-    return this.git(cwd, ['diff', '--stat']);
-  }
-
   async add(cwd: string, pathspec?: string): Promise<string> {
     const args = ['add'];
     args.push(pathspec ?? '-A');
@@ -88,57 +80,6 @@ export class GitCommandsService {
       return { sha: sha ?? '', message: message ?? '', author: author ?? '', date: date ?? '' };
     });
     return { commits };
-  }
-
-  async createBranch(cwd: string, branchName: string): Promise<string> {
-    return this.git(cwd, ['checkout', '-b', branchName]);
-  }
-
-  async checkout(cwd: string, branch: string): Promise<string> {
-    return this.git(cwd, ['checkout', branch]);
-  }
-
-  async merge(cwd: string, branch: string): Promise<string> {
-    return this.git(cwd, ['merge', branch]);
-  }
-
-  async stash(cwd: string): Promise<string> {
-    return this.git(cwd, ['stash']);
-  }
-
-  async stashPop(cwd: string): Promise<string> {
-    return this.git(cwd, ['stash', 'pop']);
-  }
-
-  async remote(cwd: string): Promise<string> {
-    return this.git(cwd, ['remote', '-v']);
-  }
-
-  async createPR(cwd: string, title: string, head: string, base = 'main'): Promise<string> {
-    // Requires `gh` CLI to be installed and authenticated
-    try {
-      const { stdout } = await execFileAsync('gh', ['pr', 'create', '--title', title, '--head', head, '--base', base, '--fill'], {
-        cwd,
-        maxBuffer: 1024 * 1024,
-      });
-      return stdout;
-    } catch (err) {
-      const e = err as ExecFileException;
-      throw new Error(`gh pr create failed: ${e.stderr?.toString() ?? e.message}`);
-    }
-  }
-
-  async listPRs(cwd: string, state = 'open'): Promise<string> {
-    try {
-      const { stdout } = await execFileAsync('gh', ['pr', 'list', '--state', state], {
-        cwd,
-        maxBuffer: 1024 * 1024,
-      });
-      return stdout;
-    } catch (err) {
-      const e = err as ExecFileException;
-      throw new Error(`gh pr list failed: ${e.stderr?.toString() ?? e.message}`);
-    }
   }
 
   validateRepo(cwd: string): boolean {

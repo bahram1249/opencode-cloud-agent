@@ -15,33 +15,23 @@ datasource db {
 /// context for OpenCode sessions.
 model Workspace {
   id        String   @id @default(cuid())
-  /// Human-readable name used in Telegram commands.
   name      String   @unique
-  /// Absolute path to the workspace working directory.
   workDir   String
-  /// Whether this is the currently active workspace.
   active    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   projects  WorkspaceProject[]
-  tasks     Task[]
   sessions  OpenCodeSession[]
 }
 
-/// A git project within a workspace. Git is independent of OpenCode tasks.
 model WorkspaceProject {
   id          String   @id @default(cuid())
   workspaceId String
-  /// Short display name, e.g. "backend", "frontend"
   name        String
-  /// Absolute path to the git project directory.
   gitPath     String
-  /// Default branch.
   branch      String   @default("main")
-  /// Remote URL (inferred from git remote if empty).
   remoteUrl   String?
-  /// Whether this project is enabled.
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -51,74 +41,20 @@ model WorkspaceProject {
   @@unique([workspaceId, name])
 }
 
-/// A git repository that the orchestrator can operate on (legacy, kept for
-/// backward-compatibility with the current workflow-based pipeline).
-model Repository {
-  id            String   @id @default(cuid())
-  slug          String   @unique
-  name          String
-  path          String
-  branch        String   @default("main")
-  buildCommand  String?  @default("npm run build")
-  testCommand   String?  @default("npm test")
-  lintCommand   String?  @default("npm run lint")
-  typecheckCommand String? @default("npm run typecheck")
-  installCommand String? @default("npm install")
-  approvalPolicy String  @default("required")
-  remoteUrl     String?
-  enabled       Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  tasks         Task[]
-  configurations Configuration[]
-
-  @@index([enabled])
-}
-
-/// Global key/value configuration overrides.
-model Configuration {
-  id    String   @id @default(cuid())
-  key   String   @unique
-  value String
-  /// Optional grouping for UI/settings organisation.
-  scope String   @default("global")
-  updatedAt DateTime @updatedAt
-
-  repositoryId String?
-  repository   Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
-
-  @@index([scope])
-}
-
-/// A session represents an interactive OpenCode process that stays alive
-/// across multiple user inputs.
 model OpenCodeSession {
   id        String   @id @default(cuid())
-  /// Short public id (e.g. s-8K3a).
   publicId  String   @unique
-  /// Telegram user id that owns this session.
   createdBy String
-  /// Workspace context.
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  /// Active prompt / description of what's being worked on.
   prompt    String
-  /// Whether the session is active (process running).
   active    Boolean  @default(true)
-  /// Whether to stream output to Telegram automatically.
   streaming Boolean  @default(true)
-  /// Telegram chat id for streaming output.
   chatId    String?
-  /// Telegram message id for the streaming output message (edited live).
   streamMessageId Int?
-  /// Pid of the child process (for diagnostics).
   pid       Int?
-  /// Accumulated stdout so far.
   output    String   @default("")
-  /// Error message if the session failed.
   errorMessage String?
-  /// Total duration in ms.
   durationMs Int?
   startedAt DateTime @default(now())
   finishedAt DateTime?
@@ -127,96 +63,4 @@ model OpenCodeSession {
 
   @@index([active])
   @@index([createdBy])
-}
-
-/// A natural-language request turned into an executable task.
-model Task {
-  id        String   @id @default(cuid())
-  publicId  String   @unique
-  prompt    String
-  attachments String? @default("[]")
-  status    String   @default("pending")
-  createdBy String
-  opencodeProfile String?
-  branch   String?
-  commitSha String?
-  tagName   String?
-  errorMessage String?
-  retryCount Int    @default(0)
-  maxRetries Int    @default(1)
-  parentId  String?
-  startedAt DateTime?
-  finishedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  /// Optional workspace context.
-  workspaceId String?
-  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-  /// Optional repository context (legacy workflow pipeline).
-  repositoryId String?
-  repository   Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
-
-  logs        TaskLog[]
-  executions  Execution[]
-
-  @@index([status])
-  @@index([repositoryId])
-  @@index([workspaceId])
-  @@index([createdBy])
-}
-
-/// A single log line/entry emitted during a task lifecycle.
-model TaskLog {
-  id        String   @id @default(cuid())
-  taskId    String
-  level     String   @default("info")
-  message   String
-  /// Optional structured metadata as JSON.
-  meta      String?
-  createdAt DateTime @default(now())
-
-  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
-
-  @@index([taskId, createdAt])
-}
-
-/// An execution of a single command (opencode, lint, test, build, typecheck, git...).
-model Execution {
-  id        String   @id @default(cuid())
-  taskId    String
-  /// Which stage produced this execution: opencode|lint|test|build|typecheck|git|install.
-  stage     String
-  command   String
-  /// Full stdout captured.
-  stdout    String   @default("")
-  /// Full stderr captured.
-  stderr    String   @default("")
-  exitCode  Int?
-  durationMs Int?
-  timedOut  Boolean  @default(false)
-  cancelled Boolean @default(false)
-  startedAt DateTime @default(now())
-  finishedAt DateTime?
-
-  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
-
-  @@index([taskId, stage])
-}
-
-/// Reusable prompt templates rendered into final prompts.
-model PromptTemplate {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  description String?
-  /// Template body with {{variable}} placeholders.
-  template  String
-  /// JSON schema of expected variables, e.g. {"issue":"number"}.
-  variables String   @default("{}")
-  category  String   @default("general")
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([category])
 }

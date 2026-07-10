@@ -8,18 +8,4 @@ export interface TelegramContext {
   updateId: number;
 }
 
-/** Command handler signature. */
-export type CommandHandler = (ctx: TelegramContext, args: string[]) => Promise<void>;
 
-/** Command metadata for registration. */
-export interface CommandDefinition {
-  name: string;
-  description: string;
-  handler: CommandHandler;
-}
-
-/** Callback query action type (for inline keyboard buttons). */
-export interface CallbackAction {
-  action: string;
-  data: Record<string, string>;
-}
