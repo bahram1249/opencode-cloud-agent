@@ -2,17 +2,6 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Telegraf, Markup } from 'telegraf';
 import { ConfigService } from '@nestjs/config';
 
-/**
- * Streams session output to a SINGLE editable Telegram message.
- * Each session gets exactly one message that is continuously updated
- * with the latest ~3500 characters of output.
- *
- * On session end, the message is updated with final status.
- *
- * When OpenCode is waiting for input (question/choice detected),
- * an inline keyboard with Tab / Enter / Up / Down / Ctrl+C
- * is attached directly to this message.
- */
 @Injectable()
 export class StreamService {
   private readonly logger = new Logger(StreamService.name);
@@ -22,24 +11,22 @@ export class StreamService {
     {
       chatId: string;
       messageId: number;
-      buffer: string;
+      readOutput: () => string;
       lastFlush: number;
     }
   >();
   private readonly flushTimers = new Map<string, NodeJS.Timeout>();
-  private readonly MAX_LENGTH = 3500;
+  private readonly MAX_LENGTH = 4000;
 
   constructor(private readonly config: ConfigService) {
     const token = this.config.get<string>('app.botToken', '');
     this.bot = token ? new Telegraf(token) : null;
   }
 
-  /**
-   * Send the initial session message. Returns the message id.
-   */
   async sendSessionStart(
     chatId: string,
     sessionPublicId: string,
+    readOutput: () => string,
   ): Promise<number | null> {
     if (!this.bot) return null;
     try {
@@ -51,7 +38,7 @@ export class StreamService {
       this.sessions.set(sessionPublicId, {
         chatId,
         messageId: msg.message_id,
-        buffer: '',
+        readOutput,
         lastFlush: Date.now(),
       });
       return msg.message_id;
@@ -61,10 +48,6 @@ export class StreamService {
     }
   }
 
-  /**
-   * Show accumulated output from a session (for session switching / viewing).
-   * Sends a fresh message with the buffer content.
-   */
   async showSessionOutput(
     chatId: string,
     sessionPublicId: string,
@@ -72,9 +55,7 @@ export class StreamService {
     running: boolean,
   ): Promise<void> {
     if (!this.bot) return;
-    const display = sessionOutput.length > this.MAX_LENGTH
-      ? '...' + sessionOutput.slice(-this.MAX_LENGTH)
-      : sessionOutput || '(no output yet)';
+    const display = (sessionOutput || '(no output yet)').slice(-this.MAX_LENGTH);
     const status = running ? '🟢 active' : '🔴 finished';
     try {
       await this.bot.telegram.sendMessage(
@@ -87,16 +68,10 @@ export class StreamService {
     }
   }
 
-  /**
-   * Append output to the session buffer and debounce-flush to the single message.
-   */
-  appendOutput(sessionPublicId: string, text: string): void {
+  appendOutput(sessionPublicId: string, _text: string): void {
     const sess = this.sessions.get(sessionPublicId);
-    if (!sess || !this.bot || !text.trim()) return;
+    if (!sess || !this.bot) return;
 
-    sess.buffer += text;
-
-    // Debounce flush: accumulate for 300ms then update
     const existing = this.flushTimers.get(sessionPublicId);
     if (existing) return;
 
@@ -113,24 +88,18 @@ export class StreamService {
     if (!sess || !this.bot) return;
     sess.lastFlush = Date.now();
 
-    const display = sess.buffer.length > this.MAX_LENGTH
-      ? '...' + sess.buffer.slice(-this.MAX_LENGTH)
-      : sess.buffer;
+    const raw = sess.readOutput().slice(-this.MAX_LENGTH);
+    if (!raw.trim()) return;
 
-    if (!display.trim()) return;
-
-    // Detect questions/prompts — if output contains ? or looks like a choice
-    const lastLine = display.split('\n').filter(Boolean).pop() || '';
-    const hasQuestion = lastLine.includes('?') || /\[\d+\]/.test(lastLine) || lastLine.endsWith(':');
+    // HTML-escape since xterm buffer returns plain text and we use parse_mode:HTML
+    const display = this.esc(raw);
 
     const extra: Record<string, unknown> = { parse_mode: 'HTML' as const };
-    if (hasQuestion) {
-      extra.reply_markup = Markup.inlineKeyboard([
-        [Markup.button.callback('↹ Tab', JSON.stringify({ t: 'key', v: 'tab' })), Markup.button.callback('↵ Enter', JSON.stringify({ t: 'key', v: 'enter' }))],
-        [Markup.button.callback('⬆ Up', JSON.stringify({ t: 'key', v: 'up' })), Markup.button.callback('⬇ Down', JSON.stringify({ t: 'key', v: 'down' }))],
-        [Markup.button.callback('✕ Ctrl+C', JSON.stringify({ t: 'key', v: 'ctrl+c' }))],
-      ]).reply_markup;
-    }
+    extra.reply_markup = Markup.inlineKeyboard([
+      [Markup.button.callback('↹ Tab', JSON.stringify({ t: 'key', v: 'tab' })), Markup.button.callback('↵ Enter', JSON.stringify({ t: 'key', v: 'enter' }))],
+      [Markup.button.callback('⬆ Up', JSON.stringify({ t: 'key', v: 'up' })), Markup.button.callback('⬇ Down', JSON.stringify({ t: 'key', v: 'down' }))],
+      [Markup.button.callback('✕ Ctrl+C', JSON.stringify({ t: 'key', v: 'ctrl+c' }))],
+    ]).reply_markup;
 
     void this.bot.telegram
       .editMessageText(
@@ -145,9 +114,6 @@ export class StreamService {
       });
   }
 
-  /**
-   * Mark session as ended and do final flush.
-   */
   async sendSessionEnd(
     sessionPublicId: string,
     exitCode: number | null,
@@ -156,7 +122,6 @@ export class StreamService {
     const sess = this.sessions.get(sessionPublicId);
     if (!sess || !this.bot) return;
 
-    // Flush any pending output first
     const timer = this.flushTimers.get(sessionPublicId);
     if (timer) {
       clearTimeout(timer);
@@ -171,9 +136,7 @@ export class StreamService {
           ? 'finished'
           : `failed (exit ${exitCode})`;
 
-    const display = sess.buffer.length > this.MAX_LENGTH
-      ? '...' + sess.buffer.slice(-this.MAX_LENGTH)
-      : sess.buffer;
+    const display = this.esc(sess.readOutput().slice(-this.MAX_LENGTH));
 
     try {
       await this.bot.telegram.editMessageText(
@@ -181,7 +144,7 @@ export class StreamService {
         sess.messageId,
         undefined,
         `<b>Session ${this.esc(sessionPublicId)}</b> ${status} (${Math.round(durationMs / 1000)}s)\n${display}`,
-        { parse_mode: 'HTML' },
+        { parse_mode: 'HTML', reply_markup: { inline_keyboard: [] } },
       );
     } catch (err) {
       this.logger.debug(`Session end: ${(err as Error).message}`);

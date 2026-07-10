@@ -364,7 +364,19 @@ export class TelegramCommandHandler {
       const session = await this.sessionService.createSession({ prompt }, userId, chatId);
 
       // Send stream header with real session id
-      await this.streamService.sendSessionStart(chatId, session.publicId);
+      await this.streamService.sendSessionStart(chatId, session.publicId, () => {
+        const buf = session.terminal.buffer.active;
+        const rows = session.terminal.rows;
+        const start = buf.viewportY;
+        const lines: string[] = [];
+        for (let y = start; y < start + rows; y++) {
+          const line = buf.getLine(y);
+          if (line) {
+            lines.push(line.translateToString().trimEnd());
+          }
+        }
+        return lines.filter(l => l.length > 0).join('\n');
+      });
 
       // Listen for output → stream
       session.emitter.on('output', (text: string) => {

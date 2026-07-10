@@ -9,6 +9,7 @@ import { chmodSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as pty from 'node-pty';
 import type { IPty } from 'node-pty';
+import { Terminal } from '@xterm/headless';
 import type { CreateSessionDto } from './dto/session.dto';
 import { AppEvents } from 'src/common/constants/workflow.constants';
 import { WorkspaceService } from '../workspace/workspace.service';
@@ -22,9 +23,9 @@ function cleanOutput(sessionId: string, raw: string): string {
   const prev = rawBuffer.get(sessionId) || '';
   let s = prev + raw;
 
-  // Save trailing partial ANSI sequence (ESC[digits or ESC[digits;digits) for next chunk
+  // Save trailing partial ANSI sequence for next chunk
   // eslint-disable-next-line no-control-regex
-  const partialRe = /\x1B\[[\d;]*$/;
+  const partialRe = /\x1B\[[\x30-\x3F]*$/;
   const partialMatch = s.match(partialRe);
   if (partialMatch) {
     rawBuffer.set(sessionId, partialMatch[0]);
@@ -33,64 +34,28 @@ function cleanOutput(sessionId: string, raw: string): string {
     rawBuffer.delete(sessionId);
   }
 
-  // Step 1: Strip OSC sequences (title, etc.) and APC/PM/SOS
+  // ── Strip OSC (BEL or ST terminated), APC, PM, SOS sequences ─────
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\][^\x07]*\x07/g, '');
+  s = s.replace(/\x1B\][^\x07\x1B]*(\x07|\x1B\\)/g, '');
   // eslint-disable-next-line no-control-regex
   s = s.replace(/\x1B[PX^_]./g, '');
 
-  // Strip cursor hide/show and DEC private mode sequences
+  // ── Tokenize: CSI sequences + text ────────────────────────────────
+  // Comprehensive CSI: ESC[ + params(0-9;:<=>?@) + intermed(space-/) + final(@-~)
   // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\[\?[\d;]*[a-zA-Z]/g, '');
-  // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\[\??25[lh]/g, '');
-
-  // Strip other known non-SGR terminal control sequences (cursor pos, erase, scroll)
-  // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B\[[\d;]*[HJKfFgGILMPSZ@`bhilnrst]/g, '');
-
-  // Strip any remaining bare ESC byte
-  // eslint-disable-next-line no-control-regex
-  s = s.replace(/\x1B/g, '');
-
-  // Strip orphaned ANSI-code text (ESC byte was in previous chunk)
-  s = s.replace(/\[\d+(?:;\d+)*m/g, '');
-
-  // Strip progress bar blocks and spinner braille
-  s = s.replace(/[■⬝]+/g, '');
-  s = s.replace(/[\u2800-\u28FF]/g, '');
-  s = s.replace(/[▣▢]/g, '');
-
-  // Strip TUI status bar patterns (progress, cost, model name)
-  s = s.replace(/·\s*DeepSeek[^\n]*/g, '');
-  s = s.replace(/▣\s*Build[^\n]*/g, '');
-  s = s.replace(/➜\s*~/g, '');
-  s = s.replace(/\d+\.\d+K\s*\(\d+%\)[^\n]*/g, '');
-  s = s.replace(/\s*·\s*\$[\d.]+/g, '');
-
-  // Remove lines that are only TUI chrome
-  const chromeRe = /^[\s⬝■▪▫▬▲▼▶◆◇○◉◎●◐◑◒◓◔◕◖◗◦◯┃│]+$/;
-  const statusRe = /^(esc interrupt|tab agents|ctrl\+p commands)/i;
-  s = s.split('\n')
-    .map(l => l.trimEnd())
-    .filter(l => l.length > 0 && !chromeRe.test(l) && !statusRe.test(l))
-    .join('\n');
-
-  // Tokenize remaining CSI sequences and text, converting SGR to HTML
+  const csiRe = /\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]/g;
   type Token = { t: 'text'; v: string } | { t: 'ansi'; v: string };
   const tokens: Token[] = [];
-  let last = 0;
-  // eslint-disable-next-line no-control-regex
-  const csiRe = /\x1B\[[\d;]*[a-zA-Z]/g;
+  let lastIdx = 0;
   let m: RegExpExecArray | null;
   while ((m = csiRe.exec(s)) !== null) {
-    if (m.index > last) tokens.push({ t: 'text', v: s.slice(last, m.index) });
+    if (m.index > lastIdx) tokens.push({ t: 'text', v: s.slice(lastIdx, m.index) });
     tokens.push({ t: 'ansi', v: m[0] });
-    last = m.index + m[0].length;
+    lastIdx = m.index + m[0].length;
   }
-  if (last < s.length) tokens.push({ t: 'text', v: s.slice(last) });
+  if (lastIdx < s.length) tokens.push({ t: 'text', v: s.slice(lastIdx) });
 
-  // Walk tokens, emit HTML for SGR formatting codes
+  // ── Walk tokens: SGR → HTML, non-SGR → stripped, text → escaped ──
   let bold = false, uline = false, italic = false;
   const out: string[] = [];
 
@@ -117,6 +82,7 @@ function cleanOutput(sessionId: string, raw: string): string {
         .replace(/>/g, '&gt;');
       if (txt) out.push(openAll() + txt + closeAll());
     } else {
+      // SGR sequences end with 'm' — extract params for formatting
       const sgr = tok.v.match(/^\x1B\[([\d;]*)m$/);
       if (sgr) {
         const params = sgr[1] ? sgr[1].split(';').map(Number) : [0];
@@ -130,12 +96,47 @@ function cleanOutput(sessionId: string, raw: string): string {
           else if (p === 3) italic = true;
         }
       }
+      // Non-SGR CSI tokens are simply discarded (stripped)
     }
   }
 
   let result = out.join('');
 
-  // Convert numbered option lines into HTML lists
+  // ── Strip TUI Unicode art ─────────────────────────────────────────
+  // Box Drawing, Block Elements, Geometric Shapes, Miscellaneous Symbols
+  result = result.replace(/[\u2500-\u257F]/g, '');  // Box Drawing
+  result = result.replace(/[\u2580-\u259F]/g, '');  // Block Elements
+  result = result.replace(/[\u25A0-\u25FF]/g, '');  // Geometric Shapes
+  result = result.replace(/[\u2800-\u28FF]/g, '');  // Braille (spinners)
+  result = result.replace(/[\u2B1B-\u2B1F]/g, ''); // ⬛⬝⬞
+  result = result.replace(/[▣▢]/g, '');
+  result = result.replace(/[⬝■]+/g, '');
+
+  // ── Strip TUI status bar patterns ─────────────────────────────────
+  result = result.replace(/·\s*\w[\w\s]+?[^\n]*?(?:Model|GitHub)/g, '');
+  result = result.replace(/▣\s*Build[^\n]*/g, '');
+  result = result.replace(/\d+\.\d+K\s*\(\d+%\)[^\n]*/g, '');
+  result = result.replace(/\s*·\s*\$[\d.]+/g, '');
+  result = result.replace(/➜\s*~/g, '');
+  result = result.replace(/●\s*Tip[^\n]*/g, '');
+  result = result.replace(/^\s*Build[\s·\w]+$/gm, '');
+  result = result.replace(/^\s*Thought:\s*\d+ms/gm, '');
+
+  // ── Remove orphaned ANSI-code text (ESC was in previous chunk) ───
+  result = result.replace(/\[\?[\d;]*[\x20-\x2F]*[a-zA-Z]/g, '');  // DEC private ([?1016$p)
+  result = result.replace(/\[>[\d;]*[a-zA-Z][\da-zA-Z]*/g, '');    // DA response ([>0qq4d73, [>4;1m)
+  result = result.replace(/\[\d+(?:;\d+)*m/g, '');                 // SGR color ([48;2;40;44;52m)
+  result = result.replace(/\]\d+;[\w=?;:-]+/g, '');                // OSC remnants (]99;opentui, ]1337;Capabilities)
+
+  // ── Remove pure-TUI-chrome lines ──────────────────────────────────
+  const chromeRe = /^[\s\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2800-\u28FF⬝■▪▫▬▲▼▶◆◇○◉◎●◐◑◒◓◔◕◖◗◦◯┃│]+$/;
+  const statusRe = /^\s*(esc interrupt|tab agents|ctrl\+p commands|Ask anything)/i;
+  result = result.split('\n')
+    .map(l => l.trimEnd())
+    .filter(l => l.length > 0 && !chromeRe.test(l) && !statusRe.test(l))
+    .join('\n');
+
+  // ── Convert numbered options to HTML lists ────────────────────────
   const lines = result.split('\n');
   const formatted: string[] = [];
   let inList = false;
@@ -169,6 +170,7 @@ export interface ActiveSession {
   startedAt: number;
   emitter: EventEmitter;
   outputBuffer: string;
+  terminal: Terminal;
   running: boolean;
 }
 
@@ -255,6 +257,7 @@ export class SessionService {
       env: { ...process.env, TERM: 'xterm-256color' },
     });
 
+    const terminal = new Terminal({ cols: 120, rows: 40, allowProposedApi: true });
     const session: ActiveSession = {
       id: sessionRec.id,
       publicId,
@@ -269,6 +272,7 @@ export class SessionService {
       startedAt: Date.now(),
       emitter,
       outputBuffer: '',
+      terminal,
       running: true,
     };
 
@@ -282,8 +286,9 @@ export class SessionService {
 
     this.logger.log(`Session ${publicId} PTY started (pid: ${ptyProcess.pid})`);
 
-    // PTY data event — captures ALL output, strips ANSI + TUI
+    // PTY data event — feed raw to xterm for screen buffer, cleaned for history
     ptyProcess.onData((raw: string) => {
+      session.terminal.write(raw);
       const clean = cleanOutput(sessionRec.id, raw);
       if (!clean) return;
       session.outputBuffer += clean + '\n';
@@ -365,6 +370,7 @@ export class SessionService {
         session.running = true;
 
         newPty.onData((raw: string) => {
+          session.terminal.write(raw);
           const clean = cleanOutput(session.id, raw);
           if (!clean) return;
           session.outputBuffer += clean + '\n';
