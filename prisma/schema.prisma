@@ -1,0 +1,156 @@
+// Prisma schema for OpenCode Orchestrator
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A git repository that the orchestrator can operate on.
+model Repository {
+  id            String   @id @default(cuid())
+  /// Human-readable slug used in Telegram commands and config (unique).
+  slug          String   @unique
+  name          String
+  /// Absolute path to the repository working tree on disk.
+  path          String
+  /// Default working branch the orchestrator branches off from.
+  branch        String   @default("main")
+  buildCommand  String?  @default("npm run build")
+  testCommand   String?  @default("npm test")
+  lintCommand   String?  @default("npm run lint")
+  typecheckCommand String? @default("npm run typecheck")
+  installCommand String? @default("npm install")
+  /// Whether a human must approve the commit/push step.
+  approvalPolicy String  @default("required")
+  /// Optional remote URL override (otherwise inferred from git remote).
+  remoteUrl     String?
+  /// Whether the repository is enabled for new tasks.
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tasks         Task[]
+  configurations Configuration[]
+
+  @@index([enabled])
+}
+
+/// Global key/value configuration overrides.
+model Configuration {
+  id    String   @id @default(cuid())
+  key   String   @unique
+  value String
+  /// Optional grouping for UI/settings organisation.
+  scope String   @default("global")
+  updatedAt DateTime @updatedAt
+
+  repositoryId String?
+  repository   Repository? @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([scope])
+}
+
+/// A natural-language request turned into an executable task.
+model Task {
+  id        String   @id @default(cuid())
+  /// Short public id exposed to Telegram (e.g. t-8K3a).
+  publicId  String   @unique
+  /// The user-supplied natural language prompt.
+  prompt    String
+  /// Optional file/screenshot attachment paths (JSON array).
+  attachments String? @default("[]")
+  /// Current finite-state-machine state. See WorkflowState.
+  status    String   @default("pending")
+  /// Telegram user id that created the task.
+  createdBy String
+  /// OpenCode profile name to use for this task.
+  opencodeProfile String?
+  /// Git branch created/used for the task.
+  branch   String?
+  /// Commit SHA once committed.
+  commitSha String?
+  /// Tag name once tagged.
+  tagName   String?
+  /// Failure reason when status = failed.
+  errorMessage String?
+  /// Number of automatic retries performed.
+  retryCount Int    @default(0)
+  /// Maximum retries allowed.
+  maxRetries Int    @default(1)
+  /// Parent task id when this task is a retry.
+  parentId  String?
+  startedAt DateTime?
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  logs        TaskLog[]
+  executions  Execution[]
+
+  @@index([status])
+  @@index([repositoryId])
+  @@index([createdBy])
+}
+
+/// A single log line/entry emitted during a task lifecycle.
+model TaskLog {
+  id        String   @id @default(cuid())
+  taskId    String
+  level     String   @default("info")
+  message   String
+  /// Optional structured metadata as JSON.
+  meta      String?
+  createdAt DateTime @default(now())
+
+  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+/// An execution of a single command (opencode, lint, test, build, typecheck, git...).
+model Execution {
+  id        String   @id @default(cuid())
+  taskId    String
+  /// Which stage produced this execution: opencode|lint|test|build|typecheck|git|install.
+  stage     String
+  command   String
+  /// Full stdout captured.
+  stdout    String   @default("")
+  /// Full stderr captured.
+  stderr    String   @default("")
+  exitCode  Int?
+  durationMs Int?
+  timedOut  Boolean  @default(false)
+  cancelled Boolean @default(false)
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+
+  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, stage])
+}
+
+/// Reusable prompt templates rendered into final prompts.
+model PromptTemplate {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  description String?
+  /// Template body with {{variable}} placeholders.
+  template  String
+  /// JSON schema of expected variables, e.g. {"issue":"number"}.
+  variables String   @default("{}")
+  category  String   @default("general")
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+}
