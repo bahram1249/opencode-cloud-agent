@@ -3,13 +3,17 @@ import { PrismaClient } from '@prisma/client';
 import { PRISMA_CLIENT } from 'src/database/prisma.module';
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto, CreateProjectDto, UpdateProjectDto } from './dto/workspace.dto';
 
 @Injectable()
 export class WorkspaceService {
   private readonly logger = new Logger(WorkspaceService.name);
 
-  constructor(@Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient) {}
+  constructor(
+    @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
+    private readonly git: GitCommandsService,
+  ) {}
 
   async create(dto: CreateWorkspaceDto) {
     const absPath = resolve(dto.workDir);
@@ -100,7 +104,10 @@ export class WorkspaceService {
 
     const absPath = resolve(dto.gitPath);
     if (!existsSync(absPath)) {
-      throw new BadRequestException(`Git path does not exist: ${absPath}`);
+      throw new BadRequestException(`Path does not exist: ${absPath}`);
+    }
+    if (!this.git.validateRepo(absPath)) {
+      throw new BadRequestException(`Not a git repository: ${absPath}. The folder must have a .git directory.`);
     }
 
     return this.prisma.workspaceProject.create({

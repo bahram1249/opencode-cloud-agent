@@ -233,6 +233,110 @@ export class TelegramCommandHandler {
   }
 
   // ===================================================================
+  //  PROJECT COMMANDS
+  // ===================================================================
+
+  async handleProjectCmd(ctx: TelegramContext, args: string[]): Promise<void> {
+    const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
+
+    const active = await this.workspaceService.getActive();
+    if (!active) {
+      await this.notificationService.sendRaw(chatId, 'No active workspace. Switch or create: /workspace switch <name>');
+      return;
+    }
+
+    if (args.length === 0 || args[0] === 'list' || args[0] === 'ls') {
+      await this.showProjectList(chatId, userId);
+      return;
+    }
+
+    const action = args[0].toLowerCase();
+    const rest = args.slice(1).join(' ').trim();
+
+    try {
+      switch (action) {
+        case 'add':
+        case 'new': {
+          if (!rest) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <git-path>\nThe git path must be an existing directory inside the active workspace.');
+            return;
+          }
+          const parts = rest.split(' ').filter(Boolean);
+          if (parts.length < 2) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <path>');
+            return;
+          }
+          const proj = await this.workspaceService.addProject(active.id, {
+            name: parts[0],
+            gitPath: parts.slice(1).join(' '),
+          });
+          await this.notificationService.sendRaw(chatId, `✅ Project "${proj.name}" added at ${proj.gitPath}`);
+          await this.showProjectList(chatId, userId);
+          return;
+        }
+
+        case 'edit':
+        case 'update': {
+          if (!rest) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project edit <name> <new-name|new-path>\nTo rename: /project edit <old-name> name:<new-name>\nTo change path: /project edit <name> path:<new-path>');
+            return;
+          }
+          const editParts = rest.match(/^(\S+)\s+(?:name:|path:)?(.+)$/);
+          if (!editParts) {
+            await this.notificationService.sendRaw(chatId, 'Invalid format. Usage: /project edit <name> name:<new-name>  or  /project edit <name> path:<new-path>');
+            return;
+          }
+          const [, projName, change] = editParts;
+          const projects = await this.workspaceService.getProjects(active.id);
+          const project = projects.find(p => p.name === projName);
+          if (!project) {
+            await this.notificationService.sendRaw(chatId, `Project "${projName}" not found in workspace "${active.name}".`);
+            return;
+          }
+          if (change.startsWith('name:')) {
+            await this.workspaceService.updateProject(project.id, { name: change.slice(5) });
+            await this.notificationService.sendRaw(chatId, `✅ Project renamed to "${change.slice(5)}"`);
+          } else if (change.startsWith('path:')) {
+            await this.workspaceService.updateProject(project.id, { gitPath: change.slice(5) });
+            await this.notificationService.sendRaw(chatId, `✅ Project path updated`);
+          } else {
+            // Treat as rename for convenience
+            await this.workspaceService.updateProject(project.id, { name: change });
+            await this.notificationService.sendRaw(chatId, `✅ Project renamed to "${change}"`);
+          }
+          await this.showProjectList(chatId, userId);
+          return;
+        }
+
+        case 'delete':
+        case 'rm':
+        case 'remove': {
+          if (!rest) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project delete <name>');
+            return;
+          }
+          const projects = await this.workspaceService.getProjects(active.id);
+          const project = projects.find(p => p.name === rest);
+          if (!project) {
+            await this.notificationService.sendRaw(chatId, `Project "${rest}" not found in workspace "${active.name}".`);
+            return;
+          }
+          await this.workspaceService.removeProject(project.id);
+          await this.notificationService.sendRaw(chatId, `🗑️ Project "${project.name}" deleted`);
+          await this.showProjectList(chatId, userId);
+          return;
+        }
+
+        default:
+          await this.showProjectList(chatId, userId);
+      }
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `Project error: ${(err as Error).message}`);
+    }
+  }
+
+  // ===================================================================
   //  GIT COMMAND
   // ===================================================================
 
@@ -567,9 +671,10 @@ export class TelegramCommandHandler {
       return;
     }
 
-    const lines = projects.map((p) => `• ${p.name} (${p.branch}) — ${p.gitPath}`);
+    const lines = projects.slice(0, 10).map((p) => `• ${p.name} (${p.branch}) — ${p.gitPath}`);
     const buttons = projects.slice(0, 6).map((p) => [
       Markup.button.callback(`📁 ${p.name}`, cb('proj:select', p.id)),
+      Markup.button.callback(`🗑️`, cb('proj:delete', p.id)),
     ]);
     buttons.push([Markup.button.callback('🔙 Main Menu', cb('nav:main'))]);
 
@@ -647,11 +752,24 @@ export class TelegramCommandHandler {
                 Markup.button.callback('📋 Log', cb('git:log', project.id)),
                 Markup.button.callback('📥 Pull', cb('git:pull', project.id)),
               ],
-              [Markup.button.callback('🔙 Projects', cb('nav:projects'))],
+              [
+                Markup.button.callback('🗑️ Delete', cb('proj:delete', project.id)),
+                Markup.button.callback('🔙 Projects', cb('nav:projects')),
+              ],
             ]),
           );
         } catch (err) {
           await this.notificationService.sendRaw(chatId, `Git error: ${(err as Error).message}`);
+        }
+        break;
+      }
+      case 'proj:delete': {
+        try {
+          await this.workspaceService.removeProject(project.id);
+          await this.notificationService.sendRaw(chatId, `🗑️ Project "${project.name}" deleted`);
+          await this.showProjectList(chatId, userId);
+        } catch (err) {
+          await this.notificationService.sendRaw(chatId, `Delete error: ${(err as Error).message}`);
         }
         break;
       }

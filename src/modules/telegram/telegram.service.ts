@@ -80,13 +80,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     bot.command('project', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
-      const args = this.getArgs(ctx);
-      if (args.length === 0) {
-        // Show active workspace projects
-        await this.handler.handleWorkspaceCmd(this.toContext(ctx), ['show']);
-      } else {
-        await this.handler.handleWorkspaceCmd(this.toContext(ctx), args);
-      }
+      await this.handler.handleProjectCmd(this.toContext(ctx), this.getArgs(ctx));
     });
 
     // ── Sessions ────────────────────────────────────────────────────
