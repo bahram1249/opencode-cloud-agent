@@ -72,6 +72,9 @@ export class TelegramCommandHandler {
       case 'sess':
         await this.handleSessCallback(chatId, userId, action.t, value);
         break;
+      case 'key':
+        await this.handleKeyAction(chatId, userId, value);
+        break;
     }
   }
 
@@ -963,6 +966,21 @@ export class TelegramCommandHandler {
     try {
       this.sessionService.sendKey(session.id, key);
       await this.notificationService.sendRaw(chatId, `⌨️ Sent: ${key}`);
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `Key error: ${(err as Error).message}`);
+    }
+  }
+
+  /** Handle inline keyboard key press from the session hint message. */
+  private async handleKeyAction(chatId: string, userId: string, key: string): Promise<void> {
+    const session = this.sessionService.getUserSession(userId);
+    if (!session) {
+      await this.notificationService.sendRaw(chatId, 'No active session.');
+      return;
+    }
+
+    try {
+      this.sessionService.sendKey(session.id, key);
     } catch (err) {
       await this.notificationService.sendRaw(chatId, `Key error: ${(err as Error).message}`);
     }

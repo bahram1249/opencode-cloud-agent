@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Telegraf } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import { ConfigService } from '@nestjs/config';
 
 /**
@@ -8,6 +8,10 @@ import { ConfigService } from '@nestjs/config';
  * with the latest ~3500 characters of output.
  *
  * On session end, the message is updated with final status.
+ *
+ * When OpenCode is waiting for input (question/choice detected),
+ * an inline keyboard with Tab / Enter / Up / Down / Ctrl+C
+ * is attached directly to this message.
  */
 @Injectable()
 export class StreamService {
@@ -115,34 +119,30 @@ export class StreamService {
 
     if (!display.trim()) return;
 
+    // Detect questions/prompts — if output contains ? or looks like a choice
+    const lastLine = display.split('\n').filter(Boolean).pop() || '';
+    const hasQuestion = lastLine.includes('?') || /\[\d+\]/.test(lastLine) || lastLine.endsWith(':');
+
+    const extra: Record<string, unknown> = { parse_mode: 'HTML' as const };
+    if (hasQuestion) {
+      extra.reply_markup = Markup.inlineKeyboard([
+        [Markup.button.callback('↹ Tab', JSON.stringify({ t: 'key:tab', v: '' })), Markup.button.callback('↵ Enter', JSON.stringify({ t: 'key:enter', v: '' }))],
+        [Markup.button.callback('⬆ Up', JSON.stringify({ t: 'key:up', v: '' })), Markup.button.callback('⬇ Down', JSON.stringify({ t: 'key:down', v: '' }))],
+        [Markup.button.callback('✕ Ctrl+C', JSON.stringify({ t: 'key:ctrl_c', v: '' }))],
+      ]).reply_markup;
+    }
+
     void this.bot.telegram
       .editMessageText(
         sess.chatId,
         sess.messageId,
         undefined,
         `<pre>${this.esc(display)}</pre>`,
-        { parse_mode: 'HTML' },
+        extra as never,
       )
       .catch((err: unknown) => {
         this.logger.debug(`Edit failed: ${(err as Error).message}`);
       });
-
-    // Detect questions/prompts — if output contains ? or looks like a choice
-    const lastLine = display.split('\n').filter(Boolean).pop() || '';
-    const hasQuestion = lastLine.includes('?') || /\[\d+\]/.test(lastLine) || lastLine.endsWith(':');
-    if (hasQuestion) {
-      void this.bot.telegram
-        .sendMessage(
-          sess.chatId,
-          '💬 OpenCode is waiting for input. Type your answer or use:\n' +
-            '/send &lt;answer&gt; — type your response\n' +
-            '/tab — autocomplete / next option\n' +
-            '/up / /down — navigate options\n' +
-            '/enter — confirm',
-          { parse_mode: 'HTML' },
-        )
-        .catch(() => {});
-    }
   }
 
   /**
