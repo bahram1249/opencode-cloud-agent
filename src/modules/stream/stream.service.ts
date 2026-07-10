@@ -88,10 +88,15 @@ export class StreamService {
     if (!sess || !this.bot) return;
     sess.lastFlush = Date.now();
 
-    const raw = sess.readOutput().slice(-this.MAX_LENGTH);
+    let raw = sess.readOutput().slice(-this.MAX_LENGTH);
     if (!raw.trim()) return;
 
-    // HTML-escape since xterm buffer returns plain text and we use parse_mode:HTML
+    // Strip TUI chrome that xterm buffer still contains (box-drawing, status bars, etc.)
+    raw = raw.replace(/[\u2500-\u257F\u2580-\u259F\u25A0-\u25FF\u2800-\u28FF]/g, '');
+    raw = raw.replace(/[▣▢■⬝┃│╹╺╻╼╽╾╿]/g, '');
+    raw = raw.replace(/^\s*Build[\s·\w]+$/gm, '');
+    raw = raw.replace(/^\s*Thought:\s*\d+ms/gm, '');
+
     const display = this.esc(raw);
 
     const extra: Record<string, unknown> = { parse_mode: 'HTML' as const };
