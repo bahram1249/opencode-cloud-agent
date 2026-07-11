@@ -213,6 +213,34 @@ export class TelegramCommandHandler {
           await this.sendWorkspaceDetails(chatId, active);
           return;
         }
+        case 'edit':
+        case 'rename': {
+          const editParts = rest.match(/^(\S+)\s+(.+)$/);
+          if (!editParts) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace rename <current-name> <new-name>');
+            return;
+          }
+          const ws = await this.workspaceService.findByName(editParts[1]);
+          if (!ws) {
+            await this.notificationService.sendRaw(chatId, `Workspace "${editParts[1]}" not found.`);
+            return;
+          }
+          await this.workspaceService.update(ws.id, { name: editParts[2] });
+          await this.notificationService.sendRaw(chatId, `✅ Workspace renamed to "${editParts[2]}"`);
+          break;
+        }
+        case 'delete':
+        case 'rm':
+        case 'remove': {
+          const ws = await this.workspaceService.findByName(rest);
+          if (!ws) {
+            await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found.`);
+            return;
+          }
+          await this.workspaceService.remove(ws.id);
+          await this.notificationService.sendRaw(chatId, `🗑️ Workspace "${ws.name}" deleted.`);
+          break;
+        }
         default:
           await this.showWorkspaceMenu(chatId);
           return;
@@ -635,6 +663,7 @@ export class TelegramCommandHandler {
       ),
     ]);
 
+    buttons.push([Markup.button.callback('➕ New Workspace', cb('ws:create'))]);
     buttons.push([Markup.button.callback('🔙 Main Menu', cb('nav:main'))]);
 
     const keyboard = Markup.inlineKeyboard(buttons);
@@ -708,6 +737,31 @@ export class TelegramCommandHandler {
       }
       case 'ws:addproj': {
         await this.notificationService.sendRaw(chatId, 'Use /project add <name> <git-path> to add a project to this workspace.');
+        break;
+      }
+      case 'ws:create': {
+        await this.notificationService.sendRaw(chatId,
+          'To create a workspace, use:\n/workspace create <name> <path>\n\nExample: /workspace create my-app /Users/me/projects/my-app');
+        break;
+      }
+      case 'ws:rename': {
+        await this.notificationService.sendRaw(chatId,
+          'To rename this workspace, use:\n/workspace edit <id> name:<new-name>\n\nOr use the REST API at PUT /workspaces/:id');
+        break;
+      }
+      case 'ws:delete': {
+        try {
+          const ws = await this.workspaceService.findById(value);
+          if (!ws) {
+            await this.notificationService.sendRaw(chatId, 'Workspace not found.');
+            return;
+          }
+          await this.workspaceService.remove(value);
+          await this.notificationService.sendRaw(chatId, `🗑️ Workspace "${ws.name}" deleted.`);
+          await this.showWorkspaceMenu(chatId);
+        } catch (err) {
+          await this.notificationService.sendRaw(chatId, `Delete error: ${(err as Error).message}`);
+        }
         break;
       }
       default:
@@ -879,7 +933,10 @@ export class TelegramCommandHandler {
     if (!ws.active) {
       rows.push([Markup.button.callback('✅ Set Active', cb('ws:set', ws.id))]);
     }
-
+    rows.push([
+      Markup.button.callback('✏️ Rename', cb('ws:rename', ws.id)),
+      Markup.button.callback('🗑️ Delete', cb('ws:delete', ws.id)),
+    ]);
     rows.push([Markup.button.callback('🔙 Workspaces', cb('nav:ws'))]);
 
     await this.notificationService.sendRawWithKeyboard(
