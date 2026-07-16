@@ -6,3 +6,4 @@ dev.db
 dev.db-journal
 coverage
 prisma/migrations/dev.db*
+.opencode
