@@ -10,6 +10,21 @@ export class CreateWorkspaceDto {
   @ApiProperty({ description: 'Absolute path to the workspace directory', example: '/home/user/projects/my-app' })
   @IsString()
   workDir!: string;
+
+  @ApiPropertyOptional({ description: 'OpenCode provider id, such as opencode, anthropic, openai, github-copilot' })
+  @IsString()
+  @IsOptional()
+  providerId?: string;
+
+  @ApiPropertyOptional({ description: 'Provider API key; used to configure the workspace container environment' })
+  @IsString()
+  @IsOptional()
+  apiKey?: string;
+
+  @ApiPropertyOptional({ description: 'Default model in provider/model format' })
+  @IsString()
+  @IsOptional()
+  model?: string;
 }
 
 export class UpdateWorkspaceDto {
@@ -27,6 +42,21 @@ export class UpdateWorkspaceDto {
   @IsBoolean()
   @IsOptional()
   active?: boolean;
+
+  @ApiPropertyOptional({ description: 'OpenCode provider id' })
+  @IsString()
+  @IsOptional()
+  providerId?: string;
+
+  @ApiPropertyOptional({ description: 'Provider API key to refresh container credentials' })
+  @IsString()
+  @IsOptional()
+  apiKey?: string;
+
+  @ApiPropertyOptional({ description: 'Default model in provider/model format' })
+  @IsString()
+  @IsOptional()
+  model?: string;
 }
 
 export class CreateProjectDto {
@@ -48,6 +78,11 @@ export class CreateProjectDto {
   @IsString()
   @IsOptional()
   remoteUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Git provider, for example github' })
+  @IsString()
+  @IsOptional()
+  provider?: string;
 }
 
 export class UpdateProjectDto {
@@ -75,4 +110,9 @@ export class UpdateProjectDto {
   @IsBoolean()
   @IsOptional()
   enabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Git provider, for example github' })
+  @IsString()
+  @IsOptional()
+  provider?: string;
 }

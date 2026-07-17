@@ -175,3 +175,28 @@ npx prisma studio    # Browse the database
 ## License
 
 MIT
+
+## Enterprise workspace runtime
+
+Each Telegram user is treated as a tenant. Workspaces are tenant-scoped and can be backed by an isolated Docker container. The workspace path is mounted at `/workspace` inside the container, and OpenCode is executed there so sessions, git operations, and provider/model defaults are isolated per workspace.
+
+OpenCode configuration follows the upstream CLI behavior: credentials can be supplied through provider environment variables or `opencode auth login`, the default model is stored in `opencode.json`, and models can be discovered with `opencode models [provider] --refresh`. The bot persists the selected provider/model on the workspace and writes an `opencode.json` into the workspace before starting sessions.
+
+Useful environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WORKSPACE_ROOT` | `/workspace` | Root directory where tenant workspace folders are created. |
+| `WORKSPACE_IMAGE` | `opencode-cloud-agent/workspace:latest` | Docker image used for workspace runtime containers. |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Docker daemon socket used by the Docker workspace service. |
+| `WORKSPACE_CONTAINERS_ENABLED` | `true` | Set to `false` to fall back to the host OpenCode binary. |
+
+Build the workspace image with `docker build -f docker/opencode-workspace.Dockerfile -t opencode-cloud-agent/workspace:latest .`. To enable Docker orchestration, install `dockerode` in deployments that have access to your npm registry and mount the Docker socket into this API container. If `dockerode` is unavailable, the app logs a warning and falls back to the host OpenCode binary.
+
+### Telegram-friendly workspace setup flow
+
+1. Create or switch a workspace: `/workspace create <name> <path>` or `/workspace switch <name>`.
+2. Add git projects manually as before: `/project add <name> <path>`. API callers can also provide `remoteUrl`; if the path is missing, the app clones it, including `gitPath: "."` for cloning into the workspace root.
+3. Configure an OpenCode provider: `/workspace provider <provider-id> <api-key>`.
+4. Pick a model from live OpenCode output: `/workspace models <provider-id>` and tap a model button. The selected model is persisted on the workspace and used as the default for new sessions.
+5. Start a session by sending a prompt. Before OpenCode starts, the app ensures the workspace container is running and automatically syncs all enabled git projects: missing projects with a remote are cloned; clean existing repositories are pulled; dirty repositories are left untouched to protect user work.

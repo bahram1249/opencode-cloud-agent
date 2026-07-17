@@ -13,6 +13,7 @@ import { Terminal } from '@xterm/headless';
 import type { CreateSessionDto } from './dto/session.dto';
 import { AppEvents } from 'src/common/constants/workflow.constants';
 import { WorkspaceService } from '../workspace/workspace.service';
+import { DockerWorkspaceService } from '../workspace/docker-workspace.service';
 
 // Buffer unfinished ANSI sequences across PTY data chunks
 const rawBuffer = new Map<string, string>();
@@ -185,6 +186,7 @@ export class SessionService {
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
     private readonly config: ConfigService,
     private readonly workspaceService: WorkspaceService,
+    private readonly dockerWorkspaces: DockerWorkspaceService,
     private readonly events: EventEmitter2,
   ) {
     // Ensure node-pty native binaries are executable (npm install sometimes drops perms)
@@ -217,14 +219,20 @@ export class SessionService {
     chatId: string,
   ): Promise<ActiveSession> {
     const workspace = dto.workspaceName
-      ? (await this.workspaceService.findByName(dto.workspaceName)) ??
-        (await this.workspaceService.findById(dto.workspaceName))
-      : await this.workspaceService.getActive();
+      ? (await this.workspaceService.findByName(dto.workspaceName, telegramUserId)) ??
+        (await this.workspaceService.findById(dto.workspaceName, telegramUserId))
+      : await this.workspaceService.getActive(telegramUserId);
 
     if (!workspace) {
       throw new BadRequestException(
-        'No active workspace. Create one: /workspace create <name> <path>',
+        'No active workspace. Create one: /workspace create <name> [path]',
       );
+    }
+
+    const syncResults = await this.workspaceService.syncProjects(workspace.id, telegramUserId);
+    const failedSync = syncResults.filter((r) => !r.ok);
+    if (failedSync.length > 0) {
+      this.logger.warn(`Workspace ${workspace.name} git sync completed with ${failedSync.length} warning(s)`);
     }
 
     const publicId = await this.generatePublicId();
@@ -249,7 +257,19 @@ export class SessionService {
     // progress indicators, and interactive prompts.
     this.logger.log(`Spawning PTY: ${this.opencodePath} in ${workspace.workDir}`);
 
-    const ptyProcess = pty.spawn(this.opencodePath, ['--prompt', dto.prompt], {
+    const ensuredContainerId = await this.dockerWorkspaces.ensureContainer({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenantId,
+      workDir: workspace.workDir,
+      providerId: workspace.providerId,
+      model: dto.model ?? workspace.model,
+    });
+    const spawnCommand = ensuredContainerId ? 'docker' : this.opencodePath;
+    const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
+    const spawnArgs = ensuredContainerId
+      ? this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs)
+      : opencodeArgs;
+    const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
       rows: 40,
@@ -343,7 +363,7 @@ export class SessionService {
    * Send text to the active PTY session. If the PTY is still alive, write
    * to it. Otherwise spawn a new PTY for the follow-up prompt.
    */
-  sendToSession(sessionId: string, text: string, cwd?: string): void {
+  async sendToSession(sessionId: string, text: string, cwd?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new NotFoundException(`Session ${sessionId} not found`);
@@ -356,7 +376,12 @@ export class SessionService {
       // PTY might be dead — spawn a new one
       this.logger.log(`PTY write failed, spawning new for: ${text.slice(0, 100)}`);
       try {
-        const newPty = pty.spawn(this.opencodePath, ['--prompt', text], {
+        const workspace = await this.prisma.workspace.findUnique({ where: { id: session.workspaceId } });
+        const spawnCommand = workspace?.containerId ? 'docker' : this.opencodePath;
+        const spawnArgs = workspace?.containerId
+          ? this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text])
+          : ['--prompt', text];
+        const newPty = pty.spawn(spawnCommand, spawnArgs, {
           name: 'xterm-color',
           cols: 120,
           rows: 40,

@@ -28,6 +28,10 @@ export interface AppConfig {
   maxConcurrentTasks: number;
   taskTimeoutMs: number;
   authorizedUsers: Set<number>;
+  workspaceRoot: string;
+  workspaceImage: string;
+  dockerSocket: string;
+  workspaceContainersEnabled: boolean;
 }
 
 export const APP_CONFIG = 'APP_CONFIG';
@@ -47,5 +51,9 @@ export const appConfig = registerAs('app', (): AppConfig => {
     maxConcurrentTasks: Number(process.env['MAX_CONCURRENT_TASKS'] ?? 3),
     taskTimeoutMs: Number(process.env['TASK_TIMEOUT_MS'] ?? 1800000),
     authorizedUsers: parseAuthorizedUsers(authorizedUsersRaw),
+    workspaceRoot: process.env['WORKSPACE_ROOT'] ?? '/workspace',
+    workspaceImage: process.env['WORKSPACE_IMAGE'] ?? 'opencode-cloud-agent/workspace:latest',
+    dockerSocket: process.env['DOCKER_SOCKET'] ?? '/var/run/docker.sock',
+    workspaceContainersEnabled: process.env['WORKSPACE_CONTAINERS_ENABLED'] !== 'false',
   };
 });

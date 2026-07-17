@@ -69,6 +69,22 @@ export class EnvironmentVariables {
   @Min(0)
   @IsOptional()
   TASK_TIMEOUT_MS?: number;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_ROOT?: string;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_IMAGE?: string;
+
+  @IsString()
+  @IsOptional()
+  DOCKER_SOCKET?: string;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_CONTAINERS_ENABLED?: string;
 }
 
 /**

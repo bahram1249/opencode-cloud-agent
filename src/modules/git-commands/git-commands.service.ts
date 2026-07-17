@@ -22,6 +22,11 @@ export interface GitLogResult {
 export class GitCommandsService {
   private readonly logger = new Logger(GitCommandsService.name);
 
+  async clone(cwd: string, remoteUrl: string, targetPath: string): Promise<string> {
+    const args = targetPath === '.' ? ['clone', remoteUrl, '.'] : ['clone', remoteUrl, targetPath];
+    return this.git(cwd, args);
+  }
+
   async status(cwd: string): Promise<GitStatusResult> {
     const branch = (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
     const status = await this.git(cwd, ['status', '--porcelain']);

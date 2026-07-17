@@ -13,16 +13,35 @@ datasource db {
 /// A workspace is a working directory (may or may not be a git repo).
 /// Workspaces can contain multiple git projects and are the primary
 /// context for OpenCode sessions.
+model Tenant {
+  id             String   @id @default(cuid())
+  telegramUserId String   @unique
+  displayName    String?
+  githubToken    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  workspaces     Workspace[]
+}
+
 model Workspace {
   id        String   @id @default(cuid())
-  name      String   @unique
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
   workDir   String
+  containerId String?
+  providerId  String?
+  model       String?
   active    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   projects  WorkspaceProject[]
   sessions  OpenCodeSession[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, active])
 }
 
 model WorkspaceProject {
@@ -32,6 +51,7 @@ model WorkspaceProject {
   gitPath     String
   branch      String   @default("main")
   remoteUrl   String?
+  provider    String?
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -39,6 +59,7 @@ model WorkspaceProject {
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, name])
+  @@index([workspaceId, gitPath])
 }
 
 model OpenCodeSession {

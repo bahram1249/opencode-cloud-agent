@@ -68,6 +68,9 @@ export class TelegramCommandHandler {
       case 'key':
         await this.handleKeyAction(chatId, userId, value);
         break;
+      case 'model':
+        await this.handleModelCallback(chatId, userId, action.t, value);
+        break;
     }
   }
 
@@ -84,7 +87,7 @@ export class TelegramCommandHandler {
         await this.showGitMenu(chatId, userId);
         break;
       case 'ws':
-        await this.showWorkspaceMenu(chatId);
+        await this.showWorkspaceMenu(chatId, userId);
         break;
       case 'projects':
         await this.showProjectList(chatId, userId);
@@ -156,9 +159,10 @@ export class TelegramCommandHandler {
 
   async handleWorkspaceCmd(ctx: TelegramContext, args: string[]): Promise<void> {
     const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
 
     if (args.length === 0) {
-      await this.showWorkspaceMenu(chatId);
+      await this.showWorkspaceMenu(chatId, userId);
       return;
     }
 
@@ -174,7 +178,7 @@ export class TelegramCommandHandler {
             await this.notificationService.sendRaw(chatId, 'Usage: /workspace create <name> <path>');
             return;
           }
-          const ws = await this.workspaceService.create({ name: parts[0], workDir: parts.slice(1).join(' ') });
+          const ws = await this.workspaceService.create({ name: parts[0], workDir: parts.slice(1).join(' ') }, userId);
           await this.notificationService.sendRaw(chatId, `✅ Workspace "${ws.name}" created at ${ws.workDir}`);
           break;
         }
@@ -183,18 +187,18 @@ export class TelegramCommandHandler {
             await this.notificationService.sendRaw(chatId, 'Usage: /workspace switch <name>');
             return;
           }
-          const ws = await this.workspaceService.findByName(rest);
+          const ws = await this.workspaceService.findByName(rest, userId);
           if (!ws) {
             await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found.`);
             return;
           }
-          await this.workspaceService.setActive(ws.id);
+          await this.workspaceService.setActive(ws.id, userId);
           await this.notificationService.sendRaw(chatId, `✅ Switched to workspace "${ws.name}"`);
           break;
         }
         case 'list':
         case 'ls': {
-          const list = await this.workspaceService.findAll();
+          const list = await this.workspaceService.findAll(userId);
           if (list.length === 0) {
             await this.notificationService.sendRaw(chatId, 'No workspaces. Create: /workspace create <name> <path>');
             return;
@@ -205,7 +209,7 @@ export class TelegramCommandHandler {
         }
         case 'show':
         case 'current': {
-          const active = await this.workspaceService.getActive();
+          const active = await this.workspaceService.getActive(userId);
           if (!active) {
             await this.notificationService.sendRaw(chatId, 'No active workspace. Switch: /workspace switch <name>');
             return;
@@ -220,29 +224,68 @@ export class TelegramCommandHandler {
             await this.notificationService.sendRaw(chatId, 'Usage: /workspace rename <current-name> <new-name>');
             return;
           }
-          const ws = await this.workspaceService.findByName(editParts[1]);
+          const ws = await this.workspaceService.findByName(editParts[1], userId);
           if (!ws) {
             await this.notificationService.sendRaw(chatId, `Workspace "${editParts[1]}" not found.`);
             return;
           }
-          await this.workspaceService.update(ws.id, { name: editParts[2] });
+          await this.workspaceService.update(ws.id, { name: editParts[2] }, userId);
           await this.notificationService.sendRaw(chatId, `✅ Workspace renamed to "${editParts[2]}"`);
+          break;
+        }
+
+        case 'provider': {
+          const parts = rest.split(' ').filter(Boolean);
+          if (parts.length < 2) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace provider <provider-id> <api-key>\nExample: /workspace provider opencode sk-...');
+            return;
+          }
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          const updated = await this.workspaceService.configureProvider(active.id, userId, parts[0], parts.slice(1).join(' '));
+          await this.notificationService.sendRaw(chatId, `✅ Provider configured for "${updated.name}". Now run /workspace models ${parts[0]} to pick a default model.`);
+          break;
+        }
+        case 'models': {
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          await this.showModelPicker(chatId, userId, active.id, rest || active.providerId || undefined);
+          return;
+        }
+        case 'model': {
+          if (!rest.includes('/')) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace model <provider/model-id>\nTip: run /workspace models <provider-id> and tap a model.');
+            return;
+          }
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          await this.workspaceService.setDefaultModel(active.id, userId, rest);
+          await this.notificationService.sendRaw(chatId, `✅ Default OpenCode model set to ${rest}`);
           break;
         }
         case 'delete':
         case 'rm':
         case 'remove': {
-          const ws = await this.workspaceService.findByName(rest);
+          const ws = await this.workspaceService.findByName(rest, userId);
           if (!ws) {
             await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found.`);
             return;
           }
-          await this.workspaceService.remove(ws.id);
+          await this.workspaceService.remove(ws.id, userId);
           await this.notificationService.sendRaw(chatId, `🗑️ Workspace "${ws.name}" deleted.`);
           break;
         }
         default:
-          await this.showWorkspaceMenu(chatId);
+          await this.showWorkspaceMenu(chatId, userId);
           return;
       }
     } catch (err) {
@@ -250,7 +293,7 @@ export class TelegramCommandHandler {
       return;
     }
 
-    await this.showWorkspaceMenu(chatId);
+    await this.showWorkspaceMenu(chatId, userId);
   }
 
   // ===================================================================
@@ -261,7 +304,7 @@ export class TelegramCommandHandler {
     const chatId = String(ctx.chat?.id ?? 0);
     const userId = String(ctx.from?.id ?? 0);
 
-    const active = await this.workspaceService.getActive();
+    const active = await this.workspaceService.getActive(userId);
     if (!active) {
       await this.notificationService.sendRaw(chatId, 'No active workspace. Switch or create: /workspace switch <name>');
       return;
@@ -291,7 +334,7 @@ export class TelegramCommandHandler {
           const proj = await this.workspaceService.addProject(active.id, {
             name: parts[0],
             gitPath: parts.slice(1).join(' '),
-          });
+          }, userId);
           await this.notificationService.sendRaw(chatId, `✅ Project "${proj.name}" added at ${proj.gitPath}`);
           await this.showProjectList(chatId, userId);
           return;
@@ -330,6 +373,45 @@ export class TelegramCommandHandler {
           return;
         }
 
+
+        case 'provider': {
+          const parts = rest.split(' ').filter(Boolean);
+          if (parts.length < 2) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace provider <provider-id> <api-key>\nExample: /workspace provider opencode sk-...');
+            return;
+          }
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          const updated = await this.workspaceService.configureProvider(active.id, userId, parts[0], parts.slice(1).join(' '));
+          await this.notificationService.sendRaw(chatId, `✅ Provider configured for "${updated.name}". Now run /workspace models ${parts[0]} to pick a default model.`);
+          break;
+        }
+        case 'models': {
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          await this.showModelPicker(chatId, userId, active.id, rest || active.providerId || undefined);
+          return;
+        }
+        case 'model': {
+          if (!rest.includes('/')) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace model <provider/model-id>\nTip: run /workspace models <provider-id> and tap a model.');
+            return;
+          }
+          const active = await this.workspaceService.getActive(userId);
+          if (!active) {
+            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
+            return;
+          }
+          await this.workspaceService.setDefaultModel(active.id, userId, rest);
+          await this.notificationService.sendRaw(chatId, `✅ Default OpenCode model set to ${rest}`);
+          break;
+        }
         case 'delete':
         case 'rm':
         case 'remove': {
@@ -374,7 +456,7 @@ export class TelegramCommandHandler {
     const rest = args.slice(1).join(' ');
 
     // Find a project to run on
-    const active = await this.workspaceService.getActive();
+    const active = await this.workspaceService.getActive(userId);
     if (!active) {
       await this.notificationService.sendRaw(chatId, 'No active workspace.');
       return;
@@ -469,9 +551,9 @@ export class TelegramCommandHandler {
 
   private async handleStartSession(chatId: string, userId: string, prompt: string): Promise<void> {
     // Ensure active workspace
-    let active = await this.workspaceService.getActive();
+    let active = await this.workspaceService.getActive(userId);
     if (!active) {
-      const all = await this.workspaceService.findAll();
+      const all = await this.workspaceService.findAll(userId);
       if (all.length === 0) {
         await this.notificationService.sendRaw(
           chatId,
@@ -481,7 +563,7 @@ export class TelegramCommandHandler {
       }
       active = all[0] ?? null;
       if (!active) return;
-      await this.workspaceService.setActive(active.id);
+      await this.workspaceService.setActive(active.id, userId);
     }
 
     try {
@@ -541,7 +623,7 @@ export class TelegramCommandHandler {
     }
 
     try {
-      this.sessionService.sendToSession(session.id, text);
+      await this.sessionService.sendToSession(session.id, text);
       await this.notificationService.sendRaw(chatId, `📤 Sent to session: ${text.slice(0, 200)}`);
     } catch (err) {
       // If process died, clean up and offer to start new session
@@ -559,7 +641,7 @@ export class TelegramCommandHandler {
   // ===================================================================
 
   private async showSessionContext(chatId: string, userId: string, session: ActiveSession): Promise<void> {
-    const active = await this.workspaceService.getActive();
+    const active = await this.workspaceService.getActive(userId);
     const projects = active ? await this.workspaceService.getProjects(active.id) : [];
 
     const wsLine = active ? `Workspace: ${active.name} ${active.workDir}` : 'No workspace';
@@ -589,7 +671,7 @@ export class TelegramCommandHandler {
 
   private async showMainMenu(chatId: string, userId: string): Promise<void> {
     const session = this.sessionService.getUserSession(userId);
-    const active = await this.workspaceService.getActive();
+    const active = await this.workspaceService.getActive(userId);
     const wsName = active ? `${active.name} (${active.workDir})` : 'None';
 
     let text = `📌 *Workspace:* ${wsName}\n`;
@@ -619,8 +701,8 @@ export class TelegramCommandHandler {
   //  GIT MENU
   // ===================================================================
 
-  private async showGitMenu(chatId: string, _userId: string): Promise<void> {
-    const active = await this.workspaceService.getActive();
+  private async showGitMenu(chatId: string, userId: string): Promise<void> {
+    const active = await this.workspaceService.getActive(userId);
     if (!active) {
       await this.notificationService.sendRaw(chatId, 'No active workspace.');
       return;
@@ -652,9 +734,9 @@ export class TelegramCommandHandler {
   //  WORKSPACE MENU
   // ===================================================================
 
-  private async showWorkspaceMenu(chatId: string): Promise<void> {
-    const all = await this.workspaceService.findAll();
-    const active = await this.workspaceService.getActive();
+  private async showWorkspaceMenu(chatId: string, userId: string): Promise<void> {
+    const all = await this.workspaceService.findAll(userId);
+    const active = await this.workspaceService.getActive(userId);
 
     const buttons = all.slice(0, 8).map((w) => [
       Markup.button.callback(
@@ -680,8 +762,8 @@ export class TelegramCommandHandler {
   //  PROJECT LIST
   // ===================================================================
 
-  private async showProjectList(chatId: string, _userId: string): Promise<void> {
-    const active = await this.workspaceService.getActive();
+  private async showProjectList(chatId: string, userId: string): Promise<void> {
+    const active = await this.workspaceService.getActive(userId);
     if (!active) {
       await this.notificationService.sendRaw(chatId, 'No active workspace.');
       return;
@@ -707,6 +789,46 @@ export class TelegramCommandHandler {
     );
   }
 
+
+  private async showModelPicker(chatId: string, userId: string, workspaceId: string, providerId?: string): Promise<void> {
+    try {
+      const models = await this.workspaceService.listOpenCodeModels(workspaceId, userId, providerId);
+      if (models.length === 0) {
+        await this.notificationService.sendRaw(
+          chatId,
+          `No models found${providerId ? ` for ${providerId}` : ''}. Configure credentials first: /workspace provider <provider-id> <api-key>`,
+        );
+        return;
+      }
+      const buttons = models.slice(0, 24).map((m) => [Markup.button.callback(`🤖 ${m}`, cb('model:set', `${workspaceId}|${m}`))]);
+      buttons.push([Markup.button.callback('🔙 Workspace', cb('ws:show', workspaceId))]);
+      await this.notificationService.sendRawWithKeyboard(
+        chatId,
+        `Choose the default OpenCode model for this workspace${providerId ? ` (${providerId})` : ''}:`,
+        Markup.inlineKeyboard(buttons),
+      );
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `Model list error: ${(err as Error).message}`);
+    }
+  }
+
+  private async handleModelCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
+    if (type !== 'model:set') return;
+    const [workspaceId, ...modelParts] = value.split('|');
+    const model = modelParts.join('|');
+    if (!workspaceId || !model) {
+      await this.notificationService.sendRaw(chatId, 'Invalid model selection.');
+      return;
+    }
+    try {
+      const ws = await this.workspaceService.setDefaultModel(workspaceId, userId, model);
+      await this.notificationService.sendRaw(chatId, `✅ ${ws.name} now uses ${model} by default.`);
+      await this.showMainMenu(chatId, userId);
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `Model selection error: ${(err as Error).message}`);
+    }
+  }
+
   // ===================================================================
   //  CALLBACK HANDLERS
   // ===================================================================
@@ -714,7 +836,7 @@ export class TelegramCommandHandler {
   private async handleWSCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
     switch (type) {
       case 'ws:show': {
-        const ws = await this.workspaceService.findById(value);
+        const ws = await this.workspaceService.findById(value, userId);
         if (!ws) {
           await this.notificationService.sendRaw(chatId, 'Workspace not found.');
           return;
@@ -724,13 +846,15 @@ export class TelegramCommandHandler {
           name: ws.name,
           workDir: ws.workDir,
           active: ws.active,
+          providerId: ws.providerId,
+          model: ws.model,
           projects: ws.projects,
         });
         break;
       }
       case 'ws:set': {
-        await this.workspaceService.setActive(value);
-        const ws = await this.workspaceService.findById(value);
+        await this.workspaceService.setActive(value, userId);
+        const ws = await this.workspaceService.findById(value, userId);
         await this.notificationService.sendRaw(chatId, `✅ Switched to "${ws?.name}"`);
         await this.showMainMenu(chatId, userId);
         break;
@@ -749,23 +873,27 @@ export class TelegramCommandHandler {
           'To rename this workspace, use:\n/workspace edit <id> name:<new-name>\n\nOr use the REST API at PUT /workspaces/:id');
         break;
       }
+      case 'ws:models': {
+        await this.showModelPicker(chatId, userId, value);
+        break;
+      }
       case 'ws:delete': {
         try {
-          const ws = await this.workspaceService.findById(value);
+          const ws = await this.workspaceService.findById(value, userId);
           if (!ws) {
             await this.notificationService.sendRaw(chatId, 'Workspace not found.');
             return;
           }
-          await this.workspaceService.remove(value);
+          await this.workspaceService.remove(value, userId);
           await this.notificationService.sendRaw(chatId, `🗑️ Workspace "${ws.name}" deleted.`);
-          await this.showWorkspaceMenu(chatId);
+          await this.showWorkspaceMenu(chatId, userId);
         } catch (err) {
           await this.notificationService.sendRaw(chatId, `Delete error: ${(err as Error).message}`);
         }
         break;
       }
       default:
-        await this.showWorkspaceMenu(chatId);
+        await this.showWorkspaceMenu(chatId, userId);
     }
   }
 
@@ -921,14 +1049,17 @@ export class TelegramCommandHandler {
 
   private async sendWorkspaceDetails(
     chatId: string,
-    ws: { id: string; name: string; workDir: string; active: boolean; projects: Array<{ id: string; name: string; gitPath: string; branch: string }> },
+    ws: { id: string; name: string; workDir: string; active: boolean; providerId?: string | null; model?: string | null; projects: Array<{ id: string; name: string; gitPath: string; branch: string }> },
   ): Promise<void> {
     const projList = ws.projects.map((p) => `• ${p.name} (${p.branch}) — ${p.gitPath}`).join('\n') || '  No projects';
 
     // Build button rows, filtering out null entries (important: [null] breaks Telegraf!)
     const rows: Array<Array<ReturnType<typeof Markup.button.callback>>> = [];
 
-    rows.push([Markup.button.callback('📁 Add Project', cb('ws:addproj', ws.id))]);
+    rows.push([
+      Markup.button.callback('📁 Add Project', cb('ws:addproj', ws.id)),
+      Markup.button.callback('🤖 Pick Model', cb('ws:models', ws.id)),
+    ]);
 
     if (!ws.active) {
       rows.push([Markup.button.callback('✅ Set Active', cb('ws:set', ws.id))]);
@@ -941,7 +1072,7 @@ export class TelegramCommandHandler {
 
     await this.notificationService.sendRawWithKeyboard(
       chatId,
-      `📋 *${ws.name}*${ws.active ? ' (active)' : ''}\nPath: ${ws.workDir}\n\nProjects:\n${projList}`,
+      `📋 *${ws.name}*${ws.active ? ' (active)' : ''}\nPath: ${ws.workDir}\nProvider: ${ws.providerId ?? 'not configured'}\nModel: ${ws.model ?? 'not selected'}\n\nProjects:\n${projList}`,
       Markup.inlineKeyboard(rows),
     );
   }
