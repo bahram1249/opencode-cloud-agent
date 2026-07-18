@@ -17,7 +17,11 @@ export class TelegramAuthGuard implements CanActivate {
       throw new UnauthorizedException('Unidentifiable Telegram user');
     }
     const appConfig = this.config.get<Partial<AppConfig>>('app');
-    const allowed = appConfig?.authorizedUsers ?? new Set<number>();
+    const allowed = appConfig?.authorizedUsers;
+    // If no authorized users configured, allow everyone
+    if (!allowed || allowed.size === 0) {
+      return true;
+    }
     if (!allowed.has(fromId)) {
       throw new UnauthorizedException(`Telegram user ${fromId} is not authorized`);
     }

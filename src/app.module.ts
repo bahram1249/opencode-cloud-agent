@@ -16,6 +16,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
 import { SessionModule } from './modules/session/session.module';
 import { StreamModule } from './modules/stream/stream.module';
 import { GitCommandsModule } from './modules/git-commands/git-commands.module';
+import { GitHubAuthModule } from './modules/github-auth/github-auth.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { GitCommandsModule } from './modules/git-commands/git-commands.module';
     SessionModule,
     StreamModule,
     GitCommandsModule,
+    GitHubAuthModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },

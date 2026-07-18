@@ -27,10 +27,8 @@ export class EnvironmentVariables {
   BOT_TOKEN!: string;
 
   @IsString()
-  AUTHORIZED_USERS!: string;
-
-  @IsString()
-  OPENCODE_PATH!: string;
+  @IsOptional()
+  AUTHORIZED_USERS?: string;
 
   @IsString()
   @IsOptional()
@@ -39,9 +37,6 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   GITHUB_TOKEN?: string;
-
-  @IsString()
-  DEFAULT_REPOSITORY!: string;
 
   @IsNumber()
   @Min(1)
@@ -85,6 +80,14 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   WORKSPACE_CONTAINERS_ENABLED?: string;
+
+  @IsString()
+  @IsOptional()
+  GITHUB_CLIENT_ID?: string;
+
+  @IsString()
+  @IsOptional()
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 /**

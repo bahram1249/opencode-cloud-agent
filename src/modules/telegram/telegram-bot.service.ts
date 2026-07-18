@@ -92,6 +92,8 @@ export class TelegramBotService {
         { command: 'opencode', description: 'Send raw OpenCode command — /opencode <args>' },
         { command: 'model', description: 'Switch model — /model <name>' },
         { command: 'skill', description: 'Load skill — /skill <name>' },
+        { command: 'login', description: 'Login with GitHub — /login github' },
+        { command: 'logout', description: 'Logout from GitHub — /logout github' },
         { command: 'help', description: 'Show help' },
       ]);
       this.logger.log('Bot commands set successfully');

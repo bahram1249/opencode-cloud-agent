@@ -85,6 +85,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.handler.handleSessionsCmd(this.toContext(ctx));
     });
 
+    // ── Setup Wizard ───────────────────────────────────────────────
+    bot.command('setup', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSetupCmd(this.toContext(ctx), this.getArgs(ctx));
+    });
+
     // ── Git ────────────────────────────────────────────────────────
     bot.command('git', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
@@ -133,6 +139,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.command('ctrl_c', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
       await this.handler.handleKeyCmd(this.toContext(ctx), 'ctrl+c');
+    });
+
+    // ── GitHub Auth ────────────────────────────────────────────────
+    bot.command('login', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleLoginCmd(this.toContext(ctx), this.getArgs(ctx));
+    });
+
+    bot.command('logout', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleLogoutCmd(this.toContext(ctx), this.getArgs(ctx));
     });
 
     // ── Help ───────────────────────────────────────────────────────

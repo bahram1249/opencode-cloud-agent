@@ -22,21 +22,45 @@ export interface GitLogResult {
 export class GitCommandsService {
   private readonly logger = new Logger(GitCommandsService.name);
 
-  async clone(cwd: string, remoteUrl: string, targetPath: string): Promise<string> {
+  async clone(cwd: string, remoteUrl: string, targetPath: string, containerId?: string): Promise<string> {
     const args = targetPath === '.' ? ['clone', remoteUrl, '.'] : ['clone', remoteUrl, targetPath];
-    return this.git(cwd, args);
+    return this.git(cwd, args, containerId);
   }
 
-  async status(cwd: string): Promise<GitStatusResult> {
-    const branch = (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    const status = await this.git(cwd, ['status', '--porcelain']);
+  async branch(cwd: string, containerId?: string): Promise<{ current: string; branches: string[] }> {
+    const output = await this.git(cwd, ['branch', '-a'], containerId);
+    const lines = output.split('\n').filter(Boolean);
+    let current = '';
+    const branches: string[] = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (line.startsWith('* ')) {
+        current = trimmed.slice(2);
+      }
+      branches.push(trimmed);
+    }
+    return { current, branches };
+  }
+
+  async checkout(cwd: string, branchName: string, containerId?: string): Promise<string> {
+    return this.git(cwd, ['checkout', branchName], containerId);
+  }
+
+  async stash(cwd: string, message?: string, containerId?: string): Promise<string> {
+    const args = ['stash', 'push', '-m', message ?? 'auto-stash'];
+    return this.git(cwd, args, containerId);
+  }
+
+  async status(cwd: string, containerId?: string): Promise<GitStatusResult> {
+    const branch = (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
+    const status = await this.git(cwd, ['status', '--porcelain'], containerId);
     const files = status.split('\n').filter(Boolean);
     const clean = files.length === 0;
 
     let ahead = 0;
     let behind = 0;
     try {
-      const revList = await this.git(cwd, ['rev-list', '--left-right', '--count', `${branch}...origin/${branch}`]);
+      const revList = await this.git(cwd, ['rev-list', '--left-right', '--count', `${branch}...origin/${branch}`], containerId);
       const parts = revList.trim().split('\t');
       ahead = parseInt(parts[0] ?? '0', 10);
       behind = parseInt(parts[1] ?? '0', 10);
@@ -47,39 +71,38 @@ export class GitCommandsService {
     return { branch, clean, files, ahead, behind };
   }
 
-  async diff(cwd: string, pathspec?: string): Promise<string> {
+  async diff(cwd: string, pathspec?: string, containerId?: string): Promise<string> {
     const args = ['diff', '--no-color'];
     if (pathspec) args.push('--', pathspec);
-    return this.git(cwd, args);
+    return this.git(cwd, args, containerId);
   }
 
-  async add(cwd: string, pathspec?: string): Promise<string> {
-    const args = ['add'];
-    args.push(pathspec ?? '-A');
-    return this.git(cwd, args);
+  async add(cwd: string, pathspec?: string, containerId?: string): Promise<string> {
+    const args = ['add', pathspec ?? '-A'];
+    return this.git(cwd, args, containerId);
   }
 
-  async commit(cwd: string, message: string): Promise<{ sha: string; message: string }> {
-    await this.git(cwd, ['commit', '-m', message]);
-    const sha = (await this.git(cwd, ['rev-parse', 'HEAD'])).trim();
+  async commit(cwd: string, message: string, containerId?: string): Promise<{ sha: string; message: string }> {
+    await this.git(cwd, ['commit', '-m', message], containerId);
+    const sha = (await this.git(cwd, ['rev-parse', 'HEAD'], containerId)).trim();
     return { sha, message };
   }
 
-  async push(cwd: string, branch?: string, remote = 'origin'): Promise<string> {
-    const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    return this.git(cwd, ['push', '-u', remote, b]);
+  async push(cwd: string, branch?: string, remote = 'origin', containerId?: string): Promise<string> {
+    const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
+    return this.git(cwd, ['push', '-u', remote, b], containerId);
   }
 
-  async pull(cwd: string, remote = 'origin', branch?: string): Promise<string> {
-    const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    return this.git(cwd, ['pull', remote, b]);
+  async pull(cwd: string, remote = 'origin', branch?: string, containerId?: string): Promise<string> {
+    const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
+    return this.git(cwd, ['pull', remote, b], containerId);
   }
 
-  async log(cwd: string, maxCount = 10): Promise<GitLogResult> {
+  async log(cwd: string, maxCount = 10, containerId?: string): Promise<GitLogResult> {
     const output = await this.git(cwd, [
       'log', `--max-count=${maxCount}`,
       '--format=%H|%s|%an|%ad', '--date=short',
-    ]);
+    ], containerId);
     const commits = output.trim().split('\n').filter(Boolean).map((line) => {
       const [sha, message, author, date] = line.split('|');
       return { sha: sha ?? '', message: message ?? '', author: author ?? '', date: date ?? '' };
@@ -87,22 +110,53 @@ export class GitCommandsService {
     return { commits };
   }
 
-  validateRepo(cwd: string): boolean {
+  async validateRepo(cwd: string, containerId?: string): Promise<boolean> {
+    if (containerId) {
+      return this.checkRepoInContainer(cwd, containerId);
+    }
     const gitDir = resolve(cwd, '.git');
     return existsSync(gitDir) || existsSync(resolve(cwd, 'HEAD'));
   }
 
-  private async git(cwd: string, args: string[]): Promise<string> {
+  private async checkRepoInContainer(cwd: string, containerId: string): Promise<boolean> {
     try {
+      await this.execInContainer(containerId, cwd, 'test', ['-d', '.git']);
+      return true;
+    } catch {
+      try {
+        await this.execInContainer(containerId, cwd, 'test', ['-f', 'HEAD']);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  private async git(cwd: string, args: string[], containerId?: string): Promise<string> {
+    try {
+      if (containerId) {
+        return await this.execInContainer(containerId, cwd, 'git', args);
+      }
       const { stdout } = await execFileAsync('git', args, {
         cwd,
         maxBuffer: 10 * 1024 * 1024,
       });
       return stdout;
     } catch (err) {
-      const e = err as ExecFileException;
+      const e = err as ExecFileException & { stderr?: string };
       const stderr = e.stderr?.toString() ?? '';
       throw new Error(`git ${args.join(' ')} failed: ${e.message}\n${stderr}`);
     }
+  }
+
+  private async execInContainer(containerId: string, cwd: string, command: string, args: string[]): Promise<string> {
+    const dockerArgs = ['exec', '-i', '-w', cwd, containerId, command, ...args];
+    const { stdout } = await execFileAsync('docker', dockerArgs, { maxBuffer: 10 * 1024 * 1024 });
+    return stdout;
+  }
+
+  /** Run an arbitrary command inside a container, returning stdout. */
+  async exec(containerId: string, cwd: string, command: string, args: string[]): Promise<string> {
+    return this.execInContainer(containerId, cwd, command, args);
   }
 }

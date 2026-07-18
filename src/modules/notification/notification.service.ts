@@ -58,14 +58,10 @@ export class NotificationService {
     keyboard: ReturnType<typeof Markup.inlineKeyboard>,
   ): Promise<void> {
     if (!this.bot) return;
-    try {
-      await this.bot.telegram.sendMessage(chatId, text, {
-         
-        reply_markup: keyboard.reply_markup as never,
-      });
-    } catch (err) {
-      this.logger.error(`Failed to send message with keyboard: ${(err as Error).message}`);
-    }
+    await this.bot.telegram.sendMessage(chatId, text, {
+      
+      reply_markup: keyboard.reply_markup as never,
+    });
   }
 
   private formatMessage(payload: NotificationPayload, emoji: string): string {

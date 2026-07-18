@@ -20,6 +20,8 @@ export interface AppConfig {
   opencodePath: string;
   redisUrl: string;
   githubToken: string;
+  githubClientId: string;
+  githubClientSecret: string;
   defaultRepository: string;
   port: number;
   webhookDomain: string;
@@ -43,6 +45,8 @@ export const appConfig = registerAs('app', (): AppConfig => {
     opencodePath: resolveBinary(process.env['OPENCODE_PATH'] ?? 'opencode'),
     redisUrl: process.env['REDIS_URL'] ?? 'redis://localhost:6379',
     githubToken: process.env['GITHUB_TOKEN'] ?? '',
+    githubClientId: process.env['GITHUB_CLIENT_ID'] ?? '',
+    githubClientSecret: process.env['GITHUB_CLIENT_SECRET'] ?? '',
     defaultRepository: process.env['DEFAULT_REPOSITORY'] ?? 'default',
     port: Number(process.env['PORT'] ?? 3000),
     webhookDomain: process.env['WEBHOOK_DOMAIN'] ?? '',

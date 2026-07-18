@@ -9,10 +9,11 @@ import { WorkspaceModule } from '../workspace/workspace.module';
 import { SessionModule } from '../session/session.module';
 import { StreamModule } from '../stream/stream.module';
 import { GitCommandsModule } from '../git-commands/git-commands.module';
+import { GitHubAuthModule } from '../github-auth/github-auth.module';
 
 @Module({
   imports: [
-    NotificationModule, WorkspaceModule, SessionModule, StreamModule, GitCommandsModule,
+    NotificationModule, WorkspaceModule, SessionModule, StreamModule, GitCommandsModule, GitHubAuthModule,
   ],
   controllers: [TelegramController],
   providers: [TelegramBotService, TelegramService, TelegramCommandHandler, TelegramAuthGuard],

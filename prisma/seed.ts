@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     const repoPath = process.env['DEFAULT_REPO_PATH'];
     if (repoPath) {
       await prisma.workspaceProject.create({
-        data: { workspaceId: workspace.id, name: 'default', gitPath: repoPath },
+        data: { workspaceId: workspace.id, name: 'default', gitPath: repoPath, path: '.' },
       });
       console.log('Added default project:', repoPath);
     }

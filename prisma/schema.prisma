@@ -18,6 +18,8 @@ model Tenant {
   telegramUserId String   @unique
   displayName    String?
   githubToken    String?
+  githubLogin    String?
+  githubAvatar   String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -25,17 +27,20 @@ model Tenant {
 }
 
 model Workspace {
-  id        String   @id @default(cuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  workDir   String
-  containerId String?
-  providerId  String?
-  model       String?
-  active    Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name         String
+  workDir      String
+  containerId  String?
+  providerId   String?
+  apiKey       String?
+  githubToken  String?
+  githubLogin  String?
+  model        String?
+  active       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   projects  WorkspaceProject[]
   sessions  OpenCodeSession[]
@@ -45,21 +50,24 @@ model Workspace {
 }
 
 model WorkspaceProject {
-  id          String   @id @default(cuid())
-  workspaceId String
-  name        String
-  gitPath     String
-  branch      String   @default("main")
-  remoteUrl   String?
-  provider    String?
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  workspaceId    String
+  name           String
+  gitPath        String
+  path           String   @default(".")
+  branch         String   @default("main")
+  remoteUrl      String?
+  provider       String?
+  autoInstall    Boolean  @default(true)
+  installCommand String?
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, name])
-  @@index([workspaceId, gitPath])
+  @@index([workspaceId, path])
 }
 
 model OpenCodeSession {

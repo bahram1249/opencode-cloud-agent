@@ -225,7 +225,7 @@ export class SessionService {
 
     if (!workspace) {
       throw new BadRequestException(
-        'No active workspace. Create one: /workspace create <name> [path]',
+        'No active workspace. Create one: /workspace create <name>',
       );
     }
 
@@ -257,18 +257,25 @@ export class SessionService {
     // progress indicators, and interactive prompts.
     this.logger.log(`Spawning PTY: ${this.opencodePath} in ${workspace.workDir}`);
 
+    const creds = await this.workspaceService.getWorkspaceCredentials(workspace.id);
     const ensuredContainerId = await this.dockerWorkspaces.ensureContainer({
       workspaceId: workspace.id,
       tenantId: workspace.tenantId,
       workDir: workspace.workDir,
       providerId: workspace.providerId,
+      apiKey: creds.apiKey,
       model: dto.model ?? workspace.model,
+      githubToken: creds.githubToken,
+      githubLogin: creds.githubLogin,
     });
-    const spawnCommand = ensuredContainerId ? 'docker' : this.opencodePath;
+    if (!ensuredContainerId) {
+      throw new BadRequestException(
+        'Docker container is not available. Workspace containers must be enabled to run sessions.',
+      );
+    }
+    const spawnCommand = 'docker';
     const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
-    const spawnArgs = ensuredContainerId
-      ? this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs)
-      : opencodeArgs;
+    const spawnArgs = this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs);
     const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
@@ -377,10 +384,11 @@ export class SessionService {
       this.logger.log(`PTY write failed, spawning new for: ${text.slice(0, 100)}`);
       try {
         const workspace = await this.prisma.workspace.findUnique({ where: { id: session.workspaceId } });
-        const spawnCommand = workspace?.containerId ? 'docker' : this.opencodePath;
-        const spawnArgs = workspace?.containerId
-          ? this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text])
-          : ['--prompt', text];
+        if (!workspace?.containerId) {
+          throw new BadRequestException('Workspace has no container; cannot spawn follow-up PTY.');
+        }
+        const spawnCommand = 'docker';
+        const spawnArgs = this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text]);
         const newPty = pty.spawn(spawnCommand, spawnArgs, {
           name: 'xterm-color',
           cols: 120,

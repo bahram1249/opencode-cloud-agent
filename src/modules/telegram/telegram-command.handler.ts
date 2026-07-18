@@ -6,6 +6,7 @@ import { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import { SessionService, type ActiveSession } from 'src/modules/session/session.service';
 import { StreamService } from 'src/modules/stream/stream.service';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
+import { GitHubAuthService } from 'src/modules/github-auth/github-auth.service';
 
 /** Helper: build callback data JSON string. */
 function cb(t: string, v?: string): string {
@@ -33,6 +34,7 @@ export class TelegramCommandHandler {
     private readonly sessionService: SessionService,
     private readonly streamService: StreamService,
     private readonly gitCommandsService: GitCommandsService,
+    private readonly githubAuthService: GitHubAuthService,
   ) {}
 
   // ===================================================================
@@ -71,6 +73,12 @@ export class TelegramCommandHandler {
       case 'model':
         await this.handleModelCallback(chatId, userId, action.t, value);
         break;
+      case 'branch':
+        await this.handleBranchCallback(chatId, userId, action.t, value);
+        break;
+      case 'setup':
+        await this.handleSetupCallback(chatId, userId, action.t, value);
+        break;
     }
   }
 
@@ -96,11 +104,56 @@ export class TelegramCommandHandler {
   }
 
   // ===================================================================
+  //  GITHUB AUTH HANDLERS
+  // ===================================================================
+
+  async handleLoginCmd(ctx: TelegramContext, args: string[]): Promise<void> {
+    const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
+
+    if (args[0]?.toLowerCase() !== 'github') {
+      await this.notificationService.sendRaw(chatId, 'Usage: /login github');
+      return;
+    }
+
+    if (!this.githubAuthService.isConfigured()) {
+      await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+      return;
+    }
+
+    const url = this.githubAuthService.generateAuthUrl(userId, chatId);
+    await this.notificationService.sendRawWithKeyboard(
+      chatId,
+      'Click below to authorize GitHub:',
+      Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
+    );
+  }
+
+  async handleLogoutCmd(ctx: TelegramContext, _args: string[]): Promise<void> {
+    const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
+
+    try {
+      await this.githubAuthService.revokeToken(userId);
+      await this.notificationService.sendRaw(chatId, '✅ Logged out from GitHub.');
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `❌ Logout failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ===================================================================
   //  MAIN SESSION / SEND HANDLERS
   // ===================================================================
 
   /** Called when user sends plain text. Routes to session or starts one. */
   async handleTextInput(chatId: string, userId: string, text: string): Promise<void> {
+    // Check if user is in setup wizard awaiting API key
+    const state = this.setupWizardState.get(userId);
+    if (state && state.step === 'api-key' && state.providerId) {
+      await this.handleSetupCallback(chatId, userId, 'setup:apikey', text);
+      return;
+    }
+
     const existing = this.sessionService.getUserSession(userId);
     if (existing) {
       await this.handleSendToSession(chatId, userId, text);
@@ -173,13 +226,23 @@ export class TelegramCommandHandler {
       switch (action) {
         case 'create':
         case 'new': {
-          const parts = rest.split(' ').filter(Boolean);
-          if (parts.length < 2) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /workspace create <name> <path>');
+          if (!rest) {
+            await this.notificationService.sendRaw(
+              chatId,
+              'Usage: /workspace create <name>\n' +
+              'Then configure a provider:\n' +
+              '  /workspace provider <id> <api-key>\n' +
+              '  Common provider IDs: opencode, openai, anthropic\n\n' +
+              'Then list and pick a model:\n' +
+              '  /workspace models <provider-id>\n' +
+              '  /workspace model <provider/model>\n\n' +
+              'Then log in to GitHub (optional):\n' +
+              '  /workspace github-login <name>',
+            );
             return;
           }
-          const ws = await this.workspaceService.create({ name: parts[0], workDir: parts.slice(1).join(' ') }, userId);
-          await this.notificationService.sendRaw(chatId, `✅ Workspace "${ws.name}" created at ${ws.workDir}`);
+          const ws = await this.workspaceService.create({ name: rest }, userId);
+          await this.notificationService.sendRaw(chatId, `✅ Workspace "${ws.name}" created.\nNext step: /workspace provider <provider-id> <api-key>`);
           break;
         }
         case 'switch': {
@@ -200,7 +263,7 @@ export class TelegramCommandHandler {
         case 'ls': {
           const list = await this.workspaceService.findAll(userId);
           if (list.length === 0) {
-            await this.notificationService.sendRaw(chatId, 'No workspaces. Create: /workspace create <name> <path>');
+            await this.notificationService.sendRaw(chatId, 'No workspaces. Create: /workspace create <name>');
             return;
           }
           const lines = list.map((w) => `• ${w.name}${w.active ? ' (active)' : ''} — ${w.workDir}`);
@@ -237,7 +300,16 @@ export class TelegramCommandHandler {
         case 'provider': {
           const parts = rest.split(' ').filter(Boolean);
           if (parts.length < 2) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /workspace provider <provider-id> <api-key>\nExample: /workspace provider opencode sk-...');
+            await this.notificationService.sendRaw(
+              chatId,
+              'Usage: /workspace provider <provider-id> <api-key>\n' +
+              'Common providers:\n' +
+              '  opencode    — OpenCode Zen/Go (get key at https://opencode.ai/auth)\n' +
+              '  openai      — OpenAI models\n' +
+              '  anthropic   — Anthropic Claude\n' +
+              '  github-copilot — GitHub Copilot\n' +
+              'Example: /workspace provider opencode sk-opencode-xxx',
+            );
             return;
           }
           const active = await this.workspaceService.getActive(userId);
@@ -246,7 +318,7 @@ export class TelegramCommandHandler {
             return;
           }
           const updated = await this.workspaceService.configureProvider(active.id, userId, parts[0], parts.slice(1).join(' '));
-          await this.notificationService.sendRaw(chatId, `✅ Provider configured for "${updated.name}". Now run /workspace models ${parts[0]} to pick a default model.`);
+          await this.notificationService.sendRaw(chatId, `✅ Provider "${parts[0]}" configured for "${updated.name}".\nNext: /workspace models ${parts[0]} to pick a model.`);
           break;
         }
         case 'models': {
@@ -271,6 +343,37 @@ export class TelegramCommandHandler {
           await this.workspaceService.setDefaultModel(active.id, userId, rest);
           await this.notificationService.sendRaw(chatId, `✅ Default OpenCode model set to ${rest}`);
           break;
+        }
+        case 'sync': {
+          const ws = await this.workspaceService.findByName(rest, userId);
+          if (!ws) {
+            await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found.`);
+            return;
+          }
+          await this.notificationService.sendRaw(chatId, `Syncing projects for "${ws.name}"...`);
+          const results = await this.workspaceService.syncProjects(ws.id, userId);
+          const lines = results.map((r) => `• ${r.name}: ${r.ok ? '✅' : '❌'} ${r.action} — ${r.message}`);
+          await this.notificationService.sendRaw(chatId, `Sync results for "${ws.name}":\n${lines.join('\n')}`);
+          return;
+        }
+        case 'github-login':
+        case 'gh-login': {
+          const ws = await this.workspaceService.findByName(rest, userId);
+          if (!ws) {
+            await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found. Usage: /workspace github-login <name>`);
+            return;
+          }
+          if (!this.githubAuthService.isConfigured()) {
+            await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+            return;
+          }
+          const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
+          await this.notificationService.sendRawWithKeyboard(
+            chatId,
+            `Click below to authorize GitHub for workspace "${ws.name}":`,
+            Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
+          );
+          return;
         }
         case 'delete':
         case 'rm':
@@ -317,25 +420,57 @@ export class TelegramCommandHandler {
 
     const action = args[0].toLowerCase();
     const rest = args.slice(1).join(' ').trim();
+    const projects = await this.workspaceService.getProjects(active.id);
 
     try {
       switch (action) {
         case 'add':
         case 'new': {
           if (!rest) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <git-path>\nThe git path must be an existing directory inside the active workspace.');
+            await this.notificationService.sendRaw(
+              chatId,
+              'Usage: /project add <name> <path> [remote-url]\n' +
+              '  name        — Display name for the project\n' +
+              '  path        — Relative path inside workspace (. for root, frontend for /workspace/frontend)\n' +
+              '  remote-url  — GitHub .git URL (optional, requires GitHub login first)',
+            );
             return;
           }
           const parts = rest.split(' ').filter(Boolean);
           if (parts.length < 2) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <path>');
+            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <path> [remote-url]\nExample: /project add frontend frontend https://github.com/org/repo.git');
             return;
           }
+          const projName = parts[0];
+          const projPath = parts[1];
+          const remoteUrl = parts.length > 2 ? parts.slice(2).join('') : undefined;
+
+          // If remote URL is provided, check GitHub auth first
+          if (remoteUrl) {
+            const creds = await this.workspaceService.getWorkspaceCredentials(active.id);
+            if (!creds.githubToken) {
+              await this.notificationService.sendRawWithKeyboard(
+                chatId,
+                '⚠️ Adding a project with a remote URL requires GitHub access.\n' +
+                'This workspace has no GitHub token configured.\n\n' +
+                'Options:\n' +
+                '  /workspace github-login <name>  — Log in to GitHub\n' +
+                '  Or use absolute path if the repo already exists',
+                Markup.inlineKeyboard([
+                  [Markup.button.callback('🔑 GitHub Login', cb('ws:ghlogin', active.id))],
+                  [Markup.button.callback('🔙 Cancel', cb('nav:main'))],
+                ]),
+              );
+              return;
+            }
+          }
+
           const proj = await this.workspaceService.addProject(active.id, {
-            name: parts[0],
-            gitPath: parts.slice(1).join(' '),
+            name: projName,
+            path: projPath,
+            remoteUrl,
           }, userId);
-          await this.notificationService.sendRaw(chatId, `✅ Project "${proj.name}" added at ${proj.gitPath}`);
+          await this.notificationService.sendRaw(chatId, `✅ Project "${proj.name}" added at ${proj.path || '.'}`);
           await this.showProjectList(chatId, userId);
           return;
         }
@@ -362,7 +497,7 @@ export class TelegramCommandHandler {
             await this.workspaceService.updateProject(project.id, { name: change.slice(5) });
             await this.notificationService.sendRaw(chatId, `✅ Project renamed to "${change.slice(5)}"`);
           } else if (change.startsWith('path:')) {
-            await this.workspaceService.updateProject(project.id, { gitPath: change.slice(5) });
+            await this.workspaceService.updateProject(project.id, { path: change.slice(5) });
             await this.notificationService.sendRaw(chatId, `✅ Project path updated`);
           } else {
             // Treat as rename for convenience
@@ -411,6 +546,85 @@ export class TelegramCommandHandler {
           await this.workspaceService.setDefaultModel(active.id, userId, rest);
           await this.notificationService.sendRaw(chatId, `✅ Default OpenCode model set to ${rest}`);
           break;
+        }
+        case 'branches':
+        case 'branch': {
+          const projName = rest || (projects.length === 1 ? projects[0].name : null);
+          if (!projName) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project branches <name>');
+            return;
+          }
+          const proj = projects.find(p => p.name === projName);
+          if (!proj) {
+            await this.notificationService.sendRaw(chatId, `Project "${projName}" not found.`);
+            return;
+          }
+          const gitPath = proj.gitPath;
+          if (!(await this.gitCommandsService.validateRepo(gitPath))) {
+            await this.notificationService.sendRaw(chatId, `Not a git repo: ${projName}`);
+            return;
+          }
+          const { current, branches } = await this.gitCommandsService.branch(gitPath);
+          const lines = branches.map((b) => (b === current ? `👉 ${b}` : `   ${b}`)).join('\n');
+          await this.notificationService.sendRaw(chatId, `📋 *Branches (${projName})*\n${lines}`);
+          return;
+        }
+        case 'switch':
+        case 'checkout': {
+          const parts = rest.split(' ').filter(Boolean);
+          if (parts.length < 2) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project switch <name> <branch>');
+            return;
+          }
+          const switchProj = projects.find(p => p.name === parts[0]);
+          if (!switchProj) {
+            await this.notificationService.sendRaw(chatId, `Project "${parts[0]}" not found.`);
+            return;
+          }
+          const targetBranch = parts.slice(1).join(' ');
+          const swGitPath = switchProj.gitPath;
+          if (!(await this.gitCommandsService.validateRepo(swGitPath))) {
+            await this.notificationService.sendRaw(chatId, `Not a git repo: ${switchProj.name}`);
+            return;
+          }
+          const status = await this.gitCommandsService.status(swGitPath);
+          if (status.clean) {
+            await this.gitCommandsService.checkout(swGitPath, targetBranch);
+            await this.notificationService.sendRaw(chatId, `✅ Switched ${switchProj.name} to branch "${targetBranch}"`);
+          } else {
+            // Dirty state — offer options
+            const msg = `⚠️ ${switchProj.name} has uncommitted changes.\nBranch: ${status.branch}\nWhat do you want to do?`;
+            await this.notificationService.sendRawWithKeyboard(
+              chatId,
+              msg,
+              Markup.inlineKeyboard([
+                [
+                  Markup.button.callback('📦 Stash', cb('branch:stash', `${switchProj.id}|${targetBranch}`)),
+                  Markup.button.callback('💾 Commit', cb('branch:commit', `${switchProj.id}|${targetBranch}`)),
+                ],
+                [
+                  Markup.button.callback('❌ Abort', cb('branch:abort', switchProj.id)),
+                ],
+              ]),
+            );
+          }
+          return;
+        }
+        case 'install': {
+          const installProj = projects.find(p => p.name === rest);
+          if (!installProj) {
+            await this.notificationService.sendRaw(chatId, `Project "${rest}" not found. Usage: /project install <name>`);
+            return;
+          }
+          // Dependency install will be handled by the auto-install service
+          await this.notificationService.sendRaw(chatId, `Installing dependencies for "${installProj.name}"...`);
+          try {
+            const result = await this.workspaceService.installProjectDependencies(installProj.id, userId);
+            await this.notificationService.sendRaw(chatId, result);
+          } catch (err) {
+            await this.notificationService.sendRaw(chatId, `Install error: ${(err as Error).message}`);
+          }
+          return;
         }
         case 'delete':
         case 'rm':
@@ -481,7 +695,7 @@ export class TelegramCommandHandler {
       gitPath = active.workDir;
     }
 
-    if (!gitPath || !this.gitCommandsService.validateRepo(gitPath)) {
+    if (!gitPath || !(await this.gitCommandsService.validateRepo(gitPath))) {
       await this.notificationService.sendRaw(chatId, `Not a git repo: ${gitPath}. Add a project: /project add <name> <path>`);
       return;
     }
@@ -537,6 +751,31 @@ export class TelegramCommandHandler {
           await this.notificationService.sendRaw(chatId, `📋 Log (${projName}):\n${lines.join('\n')}`);
           break;
         }
+        case 'pr': {
+          if (!active.containerId) {
+            await this.notificationService.sendRaw(chatId, 'No container running for this workspace.');
+            return;
+          }
+          const creds = await this.workspaceService.getWorkspaceCredentials(active.id);
+          if (!creds.githubToken) {
+            await this.notificationService.sendRaw(chatId, 'GitHub token not configured. Run /workspace github-login <name> first.');
+            return;
+          }
+          try {
+            const containerCwd = gitPath ? this.workspaceService.resolveContainerPath(gitPath, active.workDir, active.containerId) : '/workspace';
+            const output = await this.gitCommandsService.exec(active.containerId, containerCwd, 'gh', ['pr', 'create', '--fill']);
+            const url = output.trim().split('\n').pop() || output.trim();
+            await this.notificationService.sendRaw(chatId, `✅ PR created (${projName}): ${url}`);
+          } catch (err) {
+            const msg = (err as Error).message;
+            if (msg.includes('no commits')) {
+              await this.notificationService.sendRaw(chatId, 'No commits to create a PR. Commit first: /git commit -m "msg"');
+            } else {
+              await this.notificationService.sendRaw(chatId, `PR error: ${msg}`);
+            }
+          }
+          break;
+        }
         default:
           await this.showGitMenu(chatId, userId);
       }
@@ -557,7 +796,7 @@ export class TelegramCommandHandler {
       if (all.length === 0) {
         await this.notificationService.sendRaw(
           chatId,
-          'No workspaces found. Create one:\n/workspace create <name> <path>',
+          'No workspaces found. Create one:\n/workspace create <name>',
         );
         return;
       }
@@ -615,6 +854,28 @@ export class TelegramCommandHandler {
   // ===================================================================
 
   private async handleSendToSession(chatId: string, userId: string, text: string): Promise<void> {
+    // Check if user has a pending branch switch commit
+    for (const [key, branch] of this.pendingBranchSwitches) {
+      if (key.startsWith(`${userId}:`)) {
+        const projectId = key.split(':')[1];
+        const project = await this.workspaceService.findProjectById(projectId);
+        if (project) {
+          const gitPath = project.gitPath;
+          if (await this.gitCommandsService.validateRepo(gitPath)) {
+            try {
+              await this.gitCommandsService.commit(gitPath, text);
+              await this.gitCommandsService.checkout(gitPath, branch);
+              await this.notificationService.sendRaw(chatId, `✅ Committed and switched ${project.name} to "${branch}"`);
+            } catch (err) {
+              await this.notificationService.sendRaw(chatId, `Commit error: ${(err as Error).message}`);
+            }
+          }
+        }
+        this.pendingBranchSwitches.delete(key);
+        return;
+      }
+    }
+
     const session = this.sessionService.getUserSession(userId);
     if (!session) {
       // No active session — start one
@@ -710,7 +971,7 @@ export class TelegramCommandHandler {
 
     const projects = await this.workspaceService.getProjects(active.id);
     if (projects.length === 0) {
-      await this.notificationService.sendRaw(chatId, 'No git projects in this workspace. Add: /project add <name> <path>');
+      await this.notificationService.sendRaw(chatId, 'No git projects in this workspace. Add: /project add <name> <path> [remote-url]');
       return;
     }
 
@@ -771,11 +1032,11 @@ export class TelegramCommandHandler {
 
     const projects = await this.workspaceService.getProjects(active.id);
     if (projects.length === 0) {
-      await this.notificationService.sendRaw(chatId, `No projects in "${active.name}".\nAdd: /project add <name> <git-path>`);
+      await this.notificationService.sendRaw(chatId, `No projects in "${active.name}".\nAdd: /project add <name> <path> [remote-url]\nExample: /project add frontend . https://github.com/org/repo.git`);
       return;
     }
 
-    const lines = projects.slice(0, 10).map((p) => `• ${p.name} (${p.branch}) — ${p.gitPath}`);
+    const lines = projects.slice(0, 10).map((p) => `• ${p.name} — ${'path' in p && p.path ? p.path : '.'}`);
     const buttons = projects.slice(0, 6).map((p) => [
       Markup.button.callback(`📁 ${p.name}`, cb('proj:select', p.id)),
       Markup.button.callback(`🗑️`, cb('proj:delete', p.id)),
@@ -792,6 +1053,7 @@ export class TelegramCommandHandler {
 
   private async showModelPicker(chatId: string, userId: string, workspaceId: string, providerId?: string): Promise<void> {
     try {
+      const loadingMsg = await this.notificationService.sendRaw(chatId, '⏳ Loading models...');
       const models = await this.workspaceService.listOpenCodeModels(workspaceId, userId, providerId);
       if (models.length === 0) {
         await this.notificationService.sendRaw(
@@ -800,7 +1062,12 @@ export class TelegramCommandHandler {
         );
         return;
       }
-      const buttons = models.slice(0, 24).map((m) => [Markup.button.callback(`🤖 ${m}`, cb('model:set', `${workspaceId}|${m}`))]);
+      const buttons = models.slice(0, 24).map((m) => {
+        // Use short numeric key to stay under Telegram's 64-byte callback limit
+        const key = String(++this.modelCallbackCounter);
+        this.modelCallbackStore.set(key, { workspaceId, model: m });
+        return [Markup.button.callback(`🤖 ${m}`, cb('model:pick', key))];
+      });
       buttons.push([Markup.button.callback('🔙 Workspace', cb('ws:show', workspaceId))]);
       await this.notificationService.sendRawWithKeyboard(
         chatId,
@@ -813,6 +1080,32 @@ export class TelegramCommandHandler {
   }
 
   private async handleModelCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
+    if (type === 'model:pick') {
+      const entry = this.modelCallbackStore.get(value);
+      if (!entry) {
+        await this.notificationService.sendRaw(chatId, 'Model selection expired. Please pick again.');
+        return;
+      }
+      this.modelCallbackStore.delete(value);
+      const { workspaceId, model } = entry;
+      try {
+        const ws = await this.workspaceService.setDefaultModel(workspaceId, userId, model);
+        await this.notificationService.sendRaw(chatId, `✅ ${ws.name} now uses ${model} by default.`);
+
+        const state = this.setupWizardState.get(userId);
+        if (state && state.step === 'models') {
+          await this.handleSetupCallback(chatId, userId, 'setup:model', workspaceId);
+          return;
+        }
+
+        await this.showMainMenu(chatId, userId);
+      } catch (err) {
+        await this.notificationService.sendRaw(chatId, `Model selection error: ${(err as Error).message}`);
+      }
+      return;
+    }
+
+    // Legacy format — keep for backward compatibility
     if (type !== 'model:set') return;
     const [workspaceId, ...modelParts] = value.split('|');
     const model = modelParts.join('|');
@@ -823,6 +1116,14 @@ export class TelegramCommandHandler {
     try {
       const ws = await this.workspaceService.setDefaultModel(workspaceId, userId, model);
       await this.notificationService.sendRaw(chatId, `✅ ${ws.name} now uses ${model} by default.`);
+
+      // If user is in setup wizard, advance to GitHub step
+      const state = this.setupWizardState.get(userId);
+      if (state && state.step === 'models') {
+        await this.handleSetupCallback(chatId, userId, 'setup:model', workspaceId);
+        return;
+      }
+
       await this.showMainMenu(chatId, userId);
     } catch (err) {
       await this.notificationService.sendRaw(chatId, `Model selection error: ${(err as Error).message}`);
@@ -859,13 +1160,31 @@ export class TelegramCommandHandler {
         await this.showMainMenu(chatId, userId);
         break;
       }
+      case 'ws:ghlogin': {
+        const ws = await this.workspaceService.findById(value, userId);
+        if (!ws) {
+          await this.notificationService.sendRaw(chatId, 'Workspace not found.');
+          return;
+        }
+        if (!this.githubAuthService.isConfigured()) {
+          await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+          return;
+        }
+        const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
+        await this.notificationService.sendRawWithKeyboard(
+          chatId,
+          `Click below to authorize GitHub for workspace "${ws.name}":`,
+          Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
+        );
+        break;
+      }
       case 'ws:addproj': {
-        await this.notificationService.sendRaw(chatId, 'Use /project add <name> <git-path> to add a project to this workspace.');
+        await this.notificationService.sendRaw(chatId, 'Use /project add <name> <path> [remote-url] to add a project to this workspace.\nExample: /project add frontend . https://github.com/org/repo.git');
         break;
       }
       case 'ws:create': {
         await this.notificationService.sendRaw(chatId,
-          'To create a workspace, use:\n/workspace create <name> <path>\n\nExample: /workspace create my-app /Users/me/projects/my-app');
+          'To create a workspace, use:\n/workspace create <name>\n\nExample: /workspace create my-app');
         break;
       }
       case 'ws:rename': {
@@ -905,7 +1224,7 @@ export class TelegramCommandHandler {
       return;
     }
 
-    if (!this.gitCommandsService.validateRepo(project.gitPath)) {
+    if (!(await this.gitCommandsService.validateRepo(project.gitPath))) {
       await this.notificationService.sendRaw(chatId, `Not a git repo: ${project.gitPath}`);
       return;
     }
@@ -917,7 +1236,7 @@ export class TelegramCommandHandler {
           const files = s.files.slice(0, 15).map((f) => `  ${f}`).join('\n');
           await this.notificationService.sendRawWithKeyboard(
             chatId,
-            `📊 *${project.name}* — ${project.gitPath}\nBranch: ${s.branch}\n${s.clean ? '✅ Clean' : `📝 Changes:\n${files}`}`,
+            `📊 *${project.name}* — ${'path' in project && project.path ? project.path : '.'}\nBranch: ${s.branch}\n${s.clean ? '✅ Clean' : `📝 Changes:\n${files}`}`,
             Markup.inlineKeyboard([
               [
                 Markup.button.callback('📝 Diff', cb('git:diff', project.id)),
@@ -996,6 +1315,178 @@ export class TelegramCommandHandler {
     }
   }
 
+  private async handleBranchCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
+    const [projectId, ...branchParts] = value.split('|');
+    const branch = branchParts.join('|');
+    const project = await this.workspaceService.findProjectById(projectId);
+    if (!project) {
+      await this.notificationService.sendRaw(chatId, 'Project not found.');
+      return;
+    }
+    const gitPath = project.gitPath;
+    if (!(await this.gitCommandsService.validateRepo(gitPath))) {
+      await this.notificationService.sendRaw(chatId, `Not a git repo: ${project.name}`);
+      return;
+    }
+    try {
+      switch (type) {
+        case 'branch:stash': {
+          if (!branch) {
+            await this.notificationService.sendRaw(chatId, 'No target branch specified.');
+            return;
+          }
+          await this.gitCommandsService.stash(gitPath, `auto-stash before ${branch}`);
+          await this.gitCommandsService.checkout(gitPath, branch);
+          await this.notificationService.sendRaw(chatId, `✅ Stashed changes and switched ${project.name} to "${branch}"`);
+          break;
+        }
+        case 'branch:commit': {
+          if (!branch) {
+            await this.notificationService.sendRaw(chatId, 'No target branch specified.');
+            return;
+          }
+          await this.notificationService.sendRaw(chatId, `Send a commit message to commit changes on ${project.name}:`);
+          // Store pending branch switch in user state
+          this.pendingBranchSwitches.set(`${userId}:${projectId}`, branch);
+          break;
+        }
+        case 'branch:abort': {
+          await this.notificationService.sendRaw(chatId, `✅ Operation cancelled. No changes made to ${project.name}.`);
+          break;
+        }
+      }
+    } catch (err) {
+      await this.notificationService.sendRaw(chatId, `Branch error: ${(err as Error).message}`);
+    }
+  }
+
+  // Map for pending branch switches: key=`${userId}:${projectId}` → targetBranch
+  private readonly pendingBranchSwitches = new Map<string, string>();
+
+  // Map for model picker callbacks (stores full data, callback passes a short key)
+  // key is a counter-based short ID, value is { workspaceId, model }
+  private modelCallbackStore = new Map<string, { workspaceId: string; model: string }>();
+  private modelCallbackCounter = 0;
+
+  // ===================================================================
+  //  SETUP WIZARD
+  // ===================================================================
+
+  private readonly setupWizardState = new Map<string, {
+    step: 'provider' | 'api-key' | 'models' | 'github';
+    workspaceId: string;
+    providerId?: string;
+  }>();
+
+  async handleSetupCmd(ctx: TelegramContext, args: string[]): Promise<void> {
+    const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
+
+    let active = await this.workspaceService.getActive(userId);
+    if (!active) {
+      const all = await this.workspaceService.findAll(userId);
+      if (all.length === 0) {
+        await this.notificationService.sendRaw(chatId, 'No workspace yet. Create one first: /workspace create <name>\nThen run /setup to configure it.');
+        return;
+      }
+      active = all[0]!;
+      await this.workspaceService.setActive(active.id, userId);
+    }
+
+    // Step 1: Pick a provider
+    this.setupWizardState.set(userId, { step: 'provider', workspaceId: active.id });
+    await this.notificationService.sendRawWithKeyboard(
+      chatId,
+      `🚀 *Setup Wizard — Step 1/4*\nWorkspace: *${active.name}*\n\nChoose an AI provider:`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('🔵 OpenCode Zen/Go', cb('setup:provider', 'opencode'))],
+        [Markup.button.callback('🟢 OpenAI', cb('setup:provider', 'openai'))],
+        [Markup.button.callback('🟣 Anthropic Claude', cb('setup:provider', 'anthropic'))],
+        [Markup.button.callback('⚫ GitHub Copilot', cb('setup:provider', 'github-copilot'))],
+        [Markup.button.callback('🔙 Cancel', cb('setup:cancel'))],
+      ]),
+    );
+  }
+
+  private async handleSetupCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
+    const state = this.setupWizardState.get(userId);
+    if (!state) {
+      await this.notificationService.sendRaw(chatId, 'Setup session expired. Run /setup again.');
+      return;
+    }
+
+    switch (type) {
+      case 'setup:provider': {
+        state.step = 'api-key';
+        state.providerId = value;
+        const keyName = value === 'opencode' ? 'OpenCode API key' : `${value} API key`;
+        const keyHint = value === 'opencode'
+          ? 'Get it at https://opencode.ai/auth'
+          : `Get it from the ${value} dashboard`;
+        await this.notificationService.sendRaw(
+          chatId,
+          `📋 *Setup — Step 2/4*\nProvider: *${value}*\n\nEnter your ${keyName}:\n${keyHint}\n\nSend the API key as a message.`,
+        );
+        break;
+      }
+      case 'setup:apikey': {
+        // API key was received via text, stored in value
+        state.step = 'models';
+        await this.notificationService.sendRaw(chatId, 'Configuring provider...');
+        try {
+          const updated = await this.workspaceService.configureProvider(
+            state.workspaceId, userId, state.providerId ?? '', value,
+          );
+          await this.notificationService.sendRaw(chatId, `✅ Provider "${state.providerId}" configured.\n\nStep 3: Pick a model...`);
+          // List models
+          await this.showModelPicker(chatId, userId, state.workspaceId, state.providerId);
+        } catch (err) {
+          await this.notificationService.sendRaw(chatId, `❌ Provider config failed: ${(err as Error).message}\nRun /setup to try again.`);
+          this.setupWizardState.delete(userId);
+        }
+        break;
+      }
+      case 'setup:model': {
+        // Model was selected via the model picker callback — already handled by handleModelCallback
+        state.step = 'github';
+        await this.notificationService.sendRawWithKeyboard(
+          chatId,
+          '✅ Model selected!\n\n*Step 4/4: GitHub Login (optional)*\n\nConnect GitHub to manage repositories and create PRs.',
+          Markup.inlineKeyboard([
+            [Markup.button.callback('🔑 GitHub Login', cb('setup:github', state.workspaceId))],
+            [Markup.button.callback('⏭ Skip', cb('setup:done', ''))],
+          ]),
+        );
+        break;
+      }
+      case 'setup:github': {
+        if (!this.githubAuthService.isConfigured()) {
+          await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured. Skipping...\n\n✅ *Setup complete!* Next: /project add <name> <path> <remote-url>');
+          this.setupWizardState.delete(userId);
+          return;
+        }
+        const url = this.githubAuthService.generateAuthUrl(userId, chatId, state.workspaceId);
+        await this.notificationService.sendRawWithKeyboard(
+          chatId,
+          'Click below to authorize GitHub:',
+          Markup.inlineKeyboard([Markup.button.url('🔑 Authorize GitHub', url)]),
+        );
+        // Don't clear state yet — wait for callback
+        break;
+      }
+      case 'setup:done': {
+        await this.notificationService.sendRaw(chatId, '✅ *Setup complete!*\n\nTry:\n  /project add <name> <path> <remote-url>\n  Or just send a prompt to start a session.');
+        this.setupWizardState.delete(userId);
+        break;
+      }
+      case 'setup:cancel': {
+        await this.notificationService.sendRaw(chatId, 'Setup cancelled.');
+        this.setupWizardState.delete(userId);
+        break;
+      }
+    }
+  }
+
   private async handleSessCallback(chatId: string, userId: string, type: string, value: string): Promise<void> {
     switch (type) {
       case 'sess:show': {
@@ -1049,9 +1540,9 @@ export class TelegramCommandHandler {
 
   private async sendWorkspaceDetails(
     chatId: string,
-    ws: { id: string; name: string; workDir: string; active: boolean; providerId?: string | null; model?: string | null; projects: Array<{ id: string; name: string; gitPath: string; branch: string }> },
+    ws: { id: string; name: string; workDir: string; active: boolean; providerId?: string | null; model?: string | null; projects: Array<{ id: string; name: string; gitPath: string; branch: string; path?: string }> },
   ): Promise<void> {
-    const projList = ws.projects.map((p) => `• ${p.name} (${p.branch}) — ${p.gitPath}`).join('\n') || '  No projects';
+    const projList = ws.projects.map((p) => `• ${p.name} — ${p.path ?? '.'}`).join('\n') || '  No projects';
 
     // Build button rows, filtering out null entries (important: [null] breaks Telegraf!)
     const rows: Array<Array<ReturnType<typeof Markup.button.callback>>> = [];
@@ -1150,7 +1641,7 @@ export class TelegramCommandHandler {
       '/git status/diff/add/commit/push/pull/log',
       '',
       '*Workspace*',
-      '/workspace create/list/switch/show',
+      '/workspace create <name> / list / switch / show',
       '/project add/list/edit/delete',
       ].join('\n'),
     );

@@ -7,10 +7,6 @@ export class CreateWorkspaceDto {
   @Length(1, 100)
   name!: string;
 
-  @ApiProperty({ description: 'Absolute path to the workspace directory', example: '/home/user/projects/my-app' })
-  @IsString()
-  workDir!: string;
-
   @ApiPropertyOptional({ description: 'OpenCode provider id, such as opencode, anthropic, openai, github-copilot' })
   @IsString()
   @IsOptional()
@@ -65,16 +61,11 @@ export class CreateProjectDto {
   @Length(1, 100)
   name!: string;
 
-  @ApiProperty({ description: 'Absolute path to the git project', example: '/home/user/projects/my-app/backend' })
+  @ApiProperty({ description: 'Relative path from workspace root (e.g. "." for root, "frontend" for /workspace/frontend)', example: 'frontend' })
   @IsString()
-  gitPath!: string;
+  path!: string;
 
-  @ApiPropertyOptional({ description: 'Default branch', default: 'main' })
-  @IsString()
-  @IsOptional()
-  branch?: string;
-
-  @ApiPropertyOptional({ description: 'Remote URL' })
+  @ApiPropertyOptional({ description: 'Remote URL ending with .git' })
   @IsString()
   @IsOptional()
   remoteUrl?: string;
@@ -91,10 +82,10 @@ export class UpdateProjectDto {
   @IsOptional()
   name?: string;
 
-  @ApiPropertyOptional({ description: 'New git path' })
+  @ApiPropertyOptional({ description: 'New relative path from workspace root' })
   @IsString()
   @IsOptional()
-  gitPath?: string;
+  path?: string;
 
   @ApiPropertyOptional({ description: 'Default branch' })
   @IsString()
@@ -105,6 +96,16 @@ export class UpdateProjectDto {
   @IsString()
   @IsOptional()
   remoteUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Auto-install dependencies on clone/pull' })
+  @IsBoolean()
+  @IsOptional()
+  autoInstall?: boolean;
+
+  @ApiPropertyOptional({ description: 'Override install command (e.g. npm install --force)' })
+  @IsString()
+  @IsOptional()
+  installCommand?: string;
 
   @ApiPropertyOptional({ description: 'Whether the project is enabled' })
   @IsBoolean()
