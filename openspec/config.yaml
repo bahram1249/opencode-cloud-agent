@@ -1,20 +1,16 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Tech stack: TypeScript, NestJS, Prisma (SQLite), Docker, Telegraf (Telegram bot)
+  Architecture: monorepo with 8 modules (workspace, session, stream, telegram, git-commands, github-auth, notification, health)
+  Container model: per-workspace Docker containers with `sleep infinity`, env injection for credentials
+  User interface: Telegram bot with slash commands, inline keyboards, and live session streaming
+  Domain: cloud-based AI coding agent orchestrator — manages workspaces, PTY sessions with OpenCode CLI, git operations
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Always include "Modified Capabilities" section when changing existing specs
+    - Use kebab-case for capability names
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Each task should be independently verifiable

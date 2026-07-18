@@ -96,6 +96,30 @@ The bot SHALL support switching branches via `/project switch <project-name> <br
 - **THEN** the operation SHALL be cancelled
 - **AND** the working tree SHALL remain unchanged
 
+### Requirement: Git status reporting
+
+The system SHALL support showing git status for a project inside the container.
+
+#### Scenario: Check git status
+- **WHEN** user requests git status for a project
+- **THEN** the system runs `git status --porcelain` and `git rev-parse --abbrev-ref HEAD` via `docker exec` and returns branch name, file changes, ahead/behind counts
+
+### Requirement: Git diff viewing
+
+The system SHALL support viewing git diff for a project inside the container.
+
+#### Scenario: View git diff
+- **WHEN** user requests git diff for a project (optionally filtered by pathspec)
+- **THEN** the system runs `git diff --no-color [-- <pathspec>]` via `docker exec` and returns the diff output
+
+### Requirement: Git log viewing
+
+The system SHALL support viewing git commit log for a project inside the container.
+
+#### Scenario: View git log
+- **WHEN** user requests git log for a project
+- **THEN** the system runs `git log --oneline -<limit>` via `docker exec` and returns the commit history
+
 ### Requirement: Pull request creation
 
 The bot SHALL support creating a pull request via `/git pr <project-name>`. The system SHALL use the `gh` CLI inside the container to create the PR. `gh` SHALL be pre-configured with `GITHUB_TOKEN` from the workspace credentials.

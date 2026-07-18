@@ -84,6 +84,34 @@ The bot SHALL provide a `/setup` command that guides the user through workspace 
 - **WHEN** user completes all steps
 - **THEN** the bot SHALL confirm setup is complete
 
+### Requirement: Token revocation
+
+The system SHALL allow a user to revoke their GitHub token, and SHALL automatically clear a token when git operations fail with authentication errors.
+
+#### Scenario: Manual logout
+- **WHEN** a user requests logout from GitHub
+- **THEN** the system clears `githubToken` and `githubLogin` on the workspace record and notifies the user
+
+#### Scenario: Token invalidated by GitHub
+- **WHEN** a git operation fails with a 401 or 403 response
+- **THEN** the system clears the workspace's `githubToken` and notifies the user to re-authenticate
+
+### Requirement: Token scope validation
+
+The system SHALL validate that the stored GitHub token has the `repo` scope on login and warn the user if scopes are insufficient.
+
+#### Scenario: Insufficient scope warning
+- **WHEN** the OAuth callback returns a token without the `repo` scope
+- **THEN** the system stores the token but warns the user that push operations may fail
+
+### Requirement: Git credential helper configuration
+
+The system SHALL configure git's credential helper inside the workspace container to authenticate git operations using the workspace's `GITHUB_TOKEN`.
+
+#### Scenario: Configure git auth on container start
+- **WHEN** a container starts (or `ensureContainer()` runs)
+- **THEN** the system runs `git config --global credential.helper` inside the container to use the workspace's `GITHUB_USER` and `GITHUB_TOKEN`
+
 ### Requirement: Credential isolation between workspaces
 
 Credentials stored on one workspace SHALL NOT be accessible to another workspace's container. Each container SHALL only receive environment variables from its own workspace record.
