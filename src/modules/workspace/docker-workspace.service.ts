@@ -32,12 +32,12 @@ export interface WorkspaceContainerSpec {
   providerId?: string | null;
   apiKey?: string | null;
   model?: string | null;
-  githubToken?: string | null;
-  githubLogin?: string | null;
+  gitToken?: string | null;
+  gitUsername?: string | null;
 }
 
 interface DockerBackend {
-  ensureContainer(spec: WorkspaceContainerSpec, name: string, env: string[]): Promise<string>;
+  ensureContainer(spec: WorkspaceContainerSpec, name: string): Promise<string>;
   removeContainer(containerId: string): Promise<void>;
 }
 
@@ -71,7 +71,7 @@ export class DockerWorkspaceService {
       this.logger.log(`Dockerode initialised (socket: ${socketPath})`);
 
       return {
-        ensureContainer: async (spec, name, env) => {
+        ensureContainer: async (spec, name) => {
           mkdirSync(spec.workDir, { recursive: true });
           this.writeOpenCodeConfig(spec);
 
@@ -83,10 +83,9 @@ export class DockerWorkspaceService {
               this.logger.log(`Starting existing container ${name}...`);
               await existing.start();
             }
-            await this.configureGitCredentials(id, spec);
             return id;
           } catch {
-            return this.createContainerWithDockerode(docker, spec, name, env);
+            return this.createContainerWithDockerode(docker, spec, name);
           }
         },
         removeContainer: async (containerId) => {
@@ -103,12 +102,10 @@ export class DockerWorkspaceService {
     }
   }
 
-  /** Create a container using dockerode. */
   private async createContainerWithDockerode(
     docker: InstanceType<Dockerode>,
     spec: WorkspaceContainerSpec,
     name: string,
-    env: string[],
   ): Promise<string> {
     this.logger.log(`Creating container ${name} via dockerode...`);
     await this.pullImageIfNeededDockerode(docker);
@@ -118,7 +115,7 @@ export class DockerWorkspaceService {
       Tty: true,
       OpenStdin: true,
       WorkingDir: '/workspace',
-      Env: [...env, 'TERM=xterm-256color'],
+      Env: ['TERM=xterm-256color'],
       Cmd: ['sleep', 'infinity'],
       HostConfig: {
         AutoRemove: false,
@@ -132,7 +129,6 @@ export class DockerWorkspaceService {
     await container.start();
     const id = container.id;
     this.logger.log(`Container ${id} created and started`);
-    await this.configureGitCredentials(id, spec);
     return id;
   }
 
@@ -140,7 +136,7 @@ export class DockerWorkspaceService {
     try {
       const stream = await docker.pull(this.image);
       await new Promise<void>((resolvePromise, reject) => {
-        docker.modem.followProgress(stream, (err?: Error) => (err ? reject(err) : resolvePromise()));
+        docker.modem.followProgress(stream, (err?: Error) => { err ? reject(err) : resolvePromise(); });
       });
     } catch (err) {
       this.logger.warn(`Could not pull ${this.image}; may use a local image: ${(err as Error).message}`);
@@ -150,7 +146,7 @@ export class DockerWorkspaceService {
   /** Create a fallback backend that uses the docker CLI directly. */
   private createCliBackend(): DockerBackend {
     return {
-      ensureContainer: async (spec, name, env) => {
+      ensureContainer: async (spec, name) => {
         if (!(await this.checkDockerCli())) {
           throw new BadRequestException(
             'Docker is not available. Install Docker Desktop or ensure the docker CLI is in PATH.',
@@ -167,10 +163,9 @@ export class DockerWorkspaceService {
             this.logger.log(`Starting existing container ${name}...`);
             await execFileAsync('docker', ['start', name]);
           }
-          await this.configureGitCredentials(id, spec);
           return id;
         } catch {
-          return this.createContainerWithCli(spec, name, env);
+          return this.createContainerWithCli(spec, name);
         }
       },
       removeContainer: async (containerId) => {
@@ -183,11 +178,9 @@ export class DockerWorkspaceService {
     };
   }
 
-  /** Create a container using the docker CLI. */
   private async createContainerWithCli(
     spec: WorkspaceContainerSpec,
     name: string,
-    env: string[],
   ): Promise<string> {
     this.logger.log(`Creating container ${name} via docker CLI...`);
     await this.pullImageIfNeededCli();
@@ -197,7 +190,6 @@ export class DockerWorkspaceService {
       '--tty',
       '--interactive',
       '--workdir', '/workspace',
-      ...env.flatMap(e => ['--env', e]),
       '--env', 'TERM=xterm-256color',
       '--label', `opencode-cloud-agent.workspaceId=${spec.workspaceId}`,
       '--label', `opencode-cloud-agent.tenantId=${spec.tenantId}`,
@@ -209,7 +201,6 @@ export class DockerWorkspaceService {
     const id = containerId.trim();
     await execFileAsync('docker', ['start', id]);
     this.logger.log(`Container ${id} created and started`);
-    await this.configureGitCredentials(id, spec);
     return id;
   }
 
@@ -225,19 +216,6 @@ export class DockerWorkspaceService {
     }
   }
 
-  /** Shared: configure git credentials inside a running container. */
-  private async configureGitCredentials(containerId: string, spec: WorkspaceContainerSpec): Promise<void> {
-    if (!spec.githubLogin || !spec.githubToken) return;
-    try {
-      await this.execInContainer(containerId, '/workspace', 'git', [
-        'config', '--global', 'credential.helper',
-        `!f() { echo "username=${spec.githubLogin}"; echo "password=${spec.githubToken}"; }; f`,
-      ]);
-    } catch (err) {
-      this.logger.warn(`Failed to configure git credentials: ${(err as Error).message}`);
-    }
-  }
-
   // ── Public API ──────────────────────────────────────────────────────
 
   isEnabled(): boolean {
@@ -250,12 +228,12 @@ export class DockerWorkspaceService {
       return null;
     }
     const name = `opencode-ws-${spec.workspaceId}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
-    const env = this.buildProviderEnv(spec);
-    return this.backend.ensureContainer(spec, name, env);
+    return this.backend.ensureContainer(spec, name);
   }
 
-  async execInContainer(containerId: string, cwd: string, command: string, args: string[]): Promise<string> {
-    const dockerArgs = ['exec', '-w', cwd, containerId, command, ...args];
+  async execInContainer(containerId: string, cwd: string, command: string, args: string[], env?: Record<string, string>): Promise<string> {
+    const envArgs = env ? Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]) : [];
+    const dockerArgs = ['exec', '-w', cwd, ...envArgs, containerId, command, ...args];
     const { stdout } = await execFileAsync('docker', dockerArgs, { maxBuffer: 10 * 1024 * 1024 });
     return stdout;
   }
@@ -265,14 +243,16 @@ export class DockerWorkspaceService {
     await this.backend.removeContainer(containerId);
   }
 
-  dockerExecArgs(containerId: string, cwd: string, command: string, args: string[]): string[] {
+  dockerExecArgs(containerId: string, cwd: string, command: string, args: string[], env?: Record<string, string>): string[] {
     const containerCwd = this.toContainerPath(cwd, cwd);
-    return ['exec', '-i', '-t', '-w', containerCwd, containerId, command, ...args];
+    const envArgs = env ? Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]) : [];
+    return ['exec', '-i', '-t', '-w', containerCwd, ...envArgs, containerId, command, ...args];
   }
 
-  dockerExecNonInteractiveArgs(containerId: string, cwd: string, command: string, args: string[]): string[] {
+  dockerExecNonInteractiveArgs(containerId: string, cwd: string, command: string, args: string[], env?: Record<string, string>): string[] {
     const containerCwd = this.toContainerPath(cwd, cwd);
-    return ['exec', '-w', containerCwd, containerId, command, ...args];
+    const envArgs = env ? Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]) : [];
+    return ['exec', '-w', containerCwd, ...envArgs, containerId, command, ...args];
   }
 
   resolveProjectContainerPath(projectPath: string): string {
@@ -297,15 +277,19 @@ export class DockerWorkspaceService {
     writeFileSync(join(spec.workDir, 'opencode.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   }
 
-  private buildProviderEnv(spec: WorkspaceContainerSpec): string[] {
-    const env: string[] = [];
-    if (spec.githubToken) {
-      env.push(`GITHUB_TOKEN=${spec.githubToken}`);
-      if (spec.githubLogin) env.push(`GITHUB_USER=${spec.githubLogin}`);
+  buildProviderEnv(spec: WorkspaceContainerSpec): Record<string, string> {
+    const env: Record<string, string> = {};
+    if (spec.gitToken) {
+      env.GIT_TOKEN = spec.gitToken;
+      env.GITHUB_TOKEN = spec.gitToken;
+      if (spec.gitUsername) {
+        env.GIT_USERNAME = spec.gitUsername;
+        env.GITHUB_USER = spec.gitUsername;
+      }
     }
     if (spec.providerId && spec.apiKey) {
       const id = spec.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      env.push(`${id}_API_KEY=${spec.apiKey}`);
+      env[`${id}_API_KEY`] = spec.apiKey;
     }
     return env;
   }

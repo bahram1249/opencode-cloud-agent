@@ -22,9 +22,9 @@ export interface GitLogResult {
 export class GitCommandsService {
   private readonly logger = new Logger(GitCommandsService.name);
 
-  async clone(cwd: string, remoteUrl: string, targetPath: string, containerId?: string): Promise<string> {
+  async clone(cwd: string, remoteUrl: string, targetPath: string, containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
     const args = targetPath === '.' ? ['clone', remoteUrl, '.'] : ['clone', remoteUrl, targetPath];
-    return this.git(cwd, args, containerId);
+    return this.git(cwd, args, containerId, credentials);
   }
 
   async branch(cwd: string, containerId?: string): Promise<{ current: string; branches: string[] }> {
@@ -88,14 +88,14 @@ export class GitCommandsService {
     return { sha, message };
   }
 
-  async push(cwd: string, branch?: string, remote = 'origin', containerId?: string): Promise<string> {
+  async push(cwd: string, branch?: string, remote = 'origin', containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
     const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
-    return this.git(cwd, ['push', '-u', remote, b], containerId);
+    return this.git(cwd, ['push', '-u', remote, b], containerId, credentials);
   }
 
-  async pull(cwd: string, remote = 'origin', branch?: string, containerId?: string): Promise<string> {
+  async pull(cwd: string, remote = 'origin', branch?: string, containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
     const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
-    return this.git(cwd, ['pull', remote, b], containerId);
+    return this.git(cwd, ['pull', remote, b], containerId, credentials);
   }
 
   async log(cwd: string, maxCount = 10, containerId?: string): Promise<GitLogResult> {
@@ -132,9 +132,21 @@ export class GitCommandsService {
     }
   }
 
-  private async git(cwd: string, args: string[], containerId?: string): Promise<string> {
+  private buildGitShCommand(args: string[], credentials: { username: string; token: string }): { command: string; args: string[] } {
+    const esc = (s: string) => s.replace(/'/g, "'\\''");
+    const gitCmd = `git ${args.map(a => `'${esc(a)}'`).join(' ')}`;
+    const helper = `git config --global credential.helper "!f() { echo username='${esc(credentials.username)}'; echo password='${esc(credentials.token)}'; }; f"`;
+    return { command: 'sh', args: ['-c', `${helper} && ${gitCmd}`] };
+  }
+
+  private async git(cwd: string, args: string[], containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
     try {
       if (containerId) {
+        if (credentials) {
+          const wrapped = this.buildGitShCommand(args, credentials);
+          const env = { GIT_USERNAME: credentials.username, GIT_TOKEN: credentials.token };
+          return await this.execInContainer(containerId, cwd, wrapped.command, wrapped.args, env);
+        }
         return await this.execInContainer(containerId, cwd, 'git', args);
       }
       const { stdout } = await execFileAsync('git', args, {
@@ -149,8 +161,9 @@ export class GitCommandsService {
     }
   }
 
-  private async execInContainer(containerId: string, cwd: string, command: string, args: string[]): Promise<string> {
-    const dockerArgs = ['exec', '-i', '-w', cwd, containerId, command, ...args];
+  private async execInContainer(containerId: string, cwd: string, command: string, args: string[], env?: Record<string, string>): Promise<string> {
+    const envArgs = env ? Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]) : [];
+    const dockerArgs = ['exec', '-i', '-w', cwd, ...envArgs, containerId, command, ...args];
     const { stdout } = await execFileAsync('docker', dockerArgs, { maxBuffer: 10 * 1024 * 1024 });
     return stdout;
   }

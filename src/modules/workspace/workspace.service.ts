@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PRISMA_CLIENT } from 'src/database/prisma.module';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -33,9 +34,9 @@ export class WorkspaceService {
 
   async create(dto: CreateWorkspaceDto, telegramUserId = 'legacy') {
     const tenant = await this.ensureTenant(telegramUserId);
-    const sanitizedName = dto.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const wsId = randomUUID();
     const workspaceRoot = this.config.get<string>('app.workspaceRoot', '/data/workspaces');
-    const absPath = resolve(join(workspaceRoot, tenant.id, sanitizedName));
+    const absPath = resolve(join(workspaceRoot, tenant.id, wsId));
     mkdirSync(absPath, { recursive: true });
     if (!statSync(absPath).isDirectory()) throw new BadRequestException(`Path is not a directory: ${absPath}`);
 
@@ -43,13 +44,13 @@ export class WorkspaceService {
     if (existing) throw new BadRequestException(`Workspace "${dto.name}" already exists`);
 
     const ws = await this.prisma.workspace.create({
-      data: { tenantId: tenant.id, name: dto.name, workDir: absPath, providerId: dto.providerId, apiKey: dto.apiKey, model: dto.model },
+      data: { id: wsId, tenantId: tenant.id, name: dto.name, workDir: absPath, providerId: dto.providerId, apiKey: dto.apiKey, model: dto.model },
       include: { projects: true, tenant: true },
     });
     const creds = await this.getWorkspaceCredentials(ws.id);
     const containerId = await this.dockerWorkspaces.ensureContainer({
       workspaceId: ws.id, tenantId: tenant.id, workDir: absPath, providerId: dto.providerId, apiKey: creds.apiKey, model: dto.model,
-      githubToken: creds.githubToken, githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
     });
     if (containerId) return this.prisma.workspace.update({ where: { id: ws.id }, data: { containerId }, include: { projects: true, tenant: true } });
     return ws;
@@ -91,18 +92,9 @@ export class WorkspaceService {
     const ws = await this.findById(id, telegramUserId);
     if (!ws) throw new NotFoundException(`Workspace ${id} not found`);
     const data: Record<string, unknown> = {};
-    let oldWorkDir: string | null = null;
-    const workspaceRoot = this.config.get<string>('app.workspaceRoot', '/data/workspaces');
 
     if (dto.name) {
       data.name = dto.name;
-      const sanitizedName = dto.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-      const newPath = resolve(join(workspaceRoot, ws.tenantId, sanitizedName));
-      if (newPath !== ws.workDir) {
-        oldWorkDir = ws.workDir;
-        mkdirSync(newPath, { recursive: true });
-        data.workDir = newPath;
-      }
     }
     if (dto.providerId !== undefined) data.providerId = dto.providerId;
     if (dto.apiKey !== undefined) data.apiKey = dto.apiKey;
@@ -111,18 +103,8 @@ export class WorkspaceService {
     if (dto.active !== undefined) data.active = dto.active;
     const updated = await this.prisma.workspace.update({ where: { id }, data, include: { projects: true, tenant: true } });
 
-    // Clean up old workDir on rename
-    if (oldWorkDir && oldWorkDir !== updated.workDir) {
-      try {
-        const { rmSync } = await import('node:fs');
-        rmSync(oldWorkDir, { recursive: true, force: true });
-      } catch (err) {
-        this.logger.warn(`Failed to clean up old workspace dir ${oldWorkDir}: ${(err as Error).message}`);
-      }
-    }
-
     const creds = await this.getWorkspaceCredentials(updated.id);
-    const containerId = await this.dockerWorkspaces.ensureContainer({ workspaceId: updated.id, tenantId: updated.tenantId, workDir: updated.workDir, providerId: updated.providerId, apiKey: creds.apiKey, model: updated.model, githubToken: creds.githubToken, githubLogin: creds.githubLogin });
+    const containerId = await this.dockerWorkspaces.ensureContainer({ workspaceId: updated.id, tenantId: updated.tenantId, workDir: updated.workDir, providerId: updated.providerId, apiKey: creds.apiKey, model: updated.model, gitToken: creds.gitToken, gitUsername: creds.gitUsername });
     if (containerId && containerId !== updated.containerId) {
       await this.prisma.workspace.update({ where: { id }, data: { containerId }, include: { projects: true, tenant: true } });
     }
@@ -156,7 +138,9 @@ export class WorkspaceService {
     let didClone = false;
     if (dto.remoteUrl && !(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
       const target = containerPath === containerWorkDir ? '.' : relPath;
-      await this.git.clone(containerWorkDir, dto.remoteUrl, target, containerId);
+      const creds = await this.getWorkspaceCredentials(workspaceId);
+      const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
+      await this.git.clone(containerWorkDir, dto.remoteUrl, target, containerId, gitCreds);
       didClone = true;
     }
     if (!(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
@@ -219,8 +203,8 @@ export class WorkspaceService {
       providerId,
       apiKey: creds.apiKey,
       model: ws.model,
-      githubToken: creds.githubToken,
-      githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
     });
     const result = await this.prisma.workspace.update({
       where: { id: ws.id },
@@ -252,8 +236,8 @@ export class WorkspaceService {
       providerId: updated.providerId,
       apiKey: creds.apiKey,
       model: updated.model,
-      githubToken: creds.githubToken,
-      githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
     });
     if (containerId) {
       await this.syncProjects(workspaceId, telegramUserId).catch((err) =>
@@ -276,13 +260,23 @@ export class WorkspaceService {
       providerId: ws.providerId,
       apiKey: creds.apiKey,
       model: ws.model,
-      githubToken: creds.githubToken,
-      githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
     });
     if (!containerId) {
       throw new BadRequestException('Docker container not available. Start Docker and ensure WORKSPACE_CONTAINERS_ENABLED is true.');
     }
-    const dockerArgs = this.dockerWorkspaces.dockerExecNonInteractiveArgs(containerId, ws.workDir, 'opencode', ['models']);
+    const execEnv = this.dockerWorkspaces.buildProviderEnv({
+      workspaceId: ws.id,
+      tenantId: ws.tenantId,
+      workDir: ws.workDir,
+      providerId: ws.providerId,
+      apiKey: creds.apiKey,
+      model: ws.model,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
+    });
+    const dockerArgs = this.dockerWorkspaces.dockerExecNonInteractiveArgs(containerId, ws.workDir, 'opencode', ['models'], execEnv);
     const { stdout } = await execFileAsync('docker', dockerArgs, {
       cwd: ws.workDir,
       maxBuffer: 10 * 1024 * 1024,
@@ -310,8 +304,8 @@ export class WorkspaceService {
       providerId: ws.providerId,
       apiKey: creds.apiKey,
       model: ws.model,
-      githubToken: creds.githubToken,
-      githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
     });
 
     const containerId = ws.containerId ?? undefined;
@@ -335,7 +329,8 @@ export class WorkspaceService {
             continue;
           }
           const target = containerPath === containerWorkDir ? '.' : project.path || '.';
-          await this.git.clone(containerWorkDir, project.remoteUrl, target, containerId);
+          const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
+          await this.git.clone(containerWorkDir, project.remoteUrl, target, containerId, gitCreds);
           results.push({ name: project.name, action: 'clone', ok: true, message: project.remoteUrl });
           // Auto-install after clone
           if (project.autoInstall && containerId) {
@@ -359,7 +354,8 @@ export class WorkspaceService {
           results.push({ name: project.name, action: 'skip', ok: true, message: 'local changes present; skipped automatic pull' });
           continue;
         }
-        const output = await this.git.pull(containerPath, 'origin', project.branch, containerId);
+        const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
+        const output = await this.git.pull(containerPath, 'origin', project.branch, containerId, gitCreds);
         results.push({ name: project.name, action: 'pull', ok: true, message: output.trim() || 'already up to date' });
         // Auto-install after pull
         if (project.autoInstall && containerId) {
@@ -435,16 +431,15 @@ export class WorkspaceService {
     return null;
   }
 
-  async getWorkspaceCredentials(workspaceId: string, _telegramUserId?: string): Promise<{ apiKey: string | null; githubToken: string | null; githubLogin: string | null }> {
+  async getWorkspaceCredentials(workspaceId: string, _telegramUserId?: string): Promise<{ apiKey: string | null; gitToken: string | null; gitUsername: string | null }> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
-      include: { tenant: true },
     });
-    if (!ws) return { apiKey: null, githubToken: null, githubLogin: null };
-    const githubToken = ws.githubToken ?? ws.tenant.githubToken ?? null;
-    const githubLogin = ws.githubLogin ?? ws.tenant.githubLogin ?? null;
+    if (!ws) return { apiKey: null, gitToken: null, gitUsername: null };
+    const gitToken = ws.gitToken ?? null;
+    const gitUsername = ws.gitUsername ?? null;
     const apiKey = ws.apiKey ?? null;
-    return { apiKey, githubToken, githubLogin };
+    return { apiKey, gitToken, gitUsername };
   }
 
   private async execPathExists(containerId: string, path: string): Promise<boolean> {

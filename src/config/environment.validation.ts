@@ -81,13 +81,7 @@ export class EnvironmentVariables {
   @IsOptional()
   WORKSPACE_CONTAINERS_ENABLED?: string;
 
-  @IsString()
-  @IsOptional()
-  GITHUB_CLIENT_ID?: string;
 
-  @IsString()
-  @IsOptional()
-  GITHUB_CLIENT_SECRET?: string;
 }
 
 /**

@@ -20,24 +20,30 @@ Each project SHALL store a `path` field that is relative to the workspace root. 
 - **WHEN** `path: "api"` and `remoteUrl: "https://github.com/org/some-repo.git"`
 - **THEN** the clone target SHALL be `/workspace/api`, regardless of the remote name `some-repo`
 
-### Requirement: GitHub auth check before project add with remote
+### Requirement: Git credential check before project add with remote
 
-When adding a project with a remote URL, the system SHALL check if the workspace has a GitHub token configured. If no token is found, the bot SHALL warn the user and offer to initiate GitHub login.
+The system SHALL check if the workspace has git credentials configured before allowing a project add with a remote URL. If no credentials are set, the system SHALL offer to set them via `/git login`.
 
-#### Scenario: Block project add without GitHub token
+#### Scenario: Add project with remote URL — no credentials
 - **WHEN** user runs `/project add frontend . https://github.com/org/repo.git`
-- **AND** the workspace has no `githubToken`
-- **THEN** the bot SHALL display a warning: "This workspace has no GitHub token configured"
-- **AND** offer a button to initiate GitHub login
+- **AND** the workspace has no `gitToken` set
+- **THEN** the system SHALL warn the user
+- **AND** SHALL display a message with a `/git login` example
+- **AND** SHALL NOT proceed with the clone
+
+#### Scenario: Add project with remote URL — has credentials
+- **WHEN** user runs `/project add frontend . https://github.com/org/repo.git`
+- **AND** the workspace has `gitToken` set
+- **THEN** the system SHALL clone the repository using the workspace's git credentials
 
 ### Requirement: Path-based git clone
 
-When a project is added, the system SHALL clone the remote repository into `<workspaceDir>/<path>` inside the container. The clone SHALL use the workspace's `githubToken` for authentication.
+When a project is added, the system SHALL clone the remote repository into `<workspaceDir>/<path>` inside the container. The clone SHALL use the workspace's `gitToken` for authentication.
 
 #### Scenario: Clone with path
 - **WHEN** user runs `/project add api --path api --remote https://github.com/org/backend.git`
 - **THEN** the system SHALL execute `git clone https://github.com/org/backend.git /workspace/api` inside the container
-- **AND** use the workspace's `githubToken` for authentication
+- **AND** use the workspace's `gitToken` for authentication
 
 #### Scenario: Clone at workspace root
 - **WHEN** user runs `/project add monolith --path . --remote https://github.com/org/mono.git`
@@ -122,19 +128,19 @@ The system SHALL support viewing git commit log for a project inside the contain
 
 ### Requirement: Pull request creation
 
-The bot SHALL support creating a pull request via `/git pr <project-name>`. The system SHALL use the `gh` CLI inside the container to create the PR. `gh` SHALL be pre-configured with `GITHUB_TOKEN` from the workspace credentials.
+The bot SHALL support creating a pull request via `/git pr <project-name>`. The system SHALL use the `gh` CLI inside the container to create the PR. `gh` SHALL be pre-configured with `GITHUB_TOKEN` (set as a backward-compatibility alias for `GIT_TOKEN`).
 
 #### Scenario: Create PR from current branch
 - **WHEN** user runs `/git pr frontend`
 - **AND** `gh` is available in the container
-- **AND** the workspace has a valid `githubToken`
+- **AND** the workspace has a valid `gitToken`
 - **THEN** the system SHALL execute `gh pr create --fill` in the project directory
 - **AND** return the PR URL to the user
 
 #### Scenario: PR creation fails without token
 - **WHEN** user runs `/git pr frontend`
-- **AND** the workspace has no `githubToken`
-- **THEN** the bot SHALL display an error: "GitHub token not configured for this workspace. Run /workspace github-login first."
+- **AND** the workspace has no `gitToken`
+- **THEN** the bot SHALL display an error with a `/git login` example
 
 ### Requirement: Automatic dependency installation
 

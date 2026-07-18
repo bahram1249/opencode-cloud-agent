@@ -6,7 +6,7 @@ import { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import { SessionService, type ActiveSession } from 'src/modules/session/session.service';
 import { StreamService } from 'src/modules/stream/stream.service';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
-import { GitHubAuthService } from 'src/modules/github-auth/github-auth.service';
+import { GitAuthService } from 'src/modules/git-auth/git-auth.service';
 
 /** Helper: build callback data JSON string. */
 function cb(t: string, v?: string): string {
@@ -34,7 +34,7 @@ export class TelegramCommandHandler {
     private readonly sessionService: SessionService,
     private readonly streamService: StreamService,
     private readonly gitCommandsService: GitCommandsService,
-    private readonly githubAuthService: GitHubAuthService,
+    private readonly gitAuthService: GitAuthService,
   ) {}
 
   // ===================================================================
@@ -104,44 +104,6 @@ export class TelegramCommandHandler {
   }
 
   // ===================================================================
-  //  GITHUB AUTH HANDLERS
-  // ===================================================================
-
-  async handleLoginCmd(ctx: TelegramContext, args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const userId = String(ctx.from?.id ?? 0);
-
-    if (args[0]?.toLowerCase() !== 'github') {
-      await this.notificationService.sendRaw(chatId, 'Usage: /login github');
-      return;
-    }
-
-    if (!this.githubAuthService.isConfigured()) {
-      await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured.\nUse /workspace github-token <pat> to set a personal access token on the active workspace.');
-      return;
-    }
-
-    const url = this.githubAuthService.generateAuthUrl(userId, chatId);
-    await this.notificationService.sendRawWithKeyboard(
-      chatId,
-      'Click below to authorize GitHub:',
-      Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
-    );
-  }
-
-  async handleLogoutCmd(ctx: TelegramContext, _args: string[]): Promise<void> {
-    const chatId = String(ctx.chat?.id ?? 0);
-    const userId = String(ctx.from?.id ?? 0);
-
-    try {
-      await this.githubAuthService.revokeToken(userId);
-      await this.notificationService.sendRaw(chatId, '✅ Logged out from GitHub.');
-    } catch (err) {
-      await this.notificationService.sendRaw(chatId, `❌ Logout failed: ${(err as Error).message}`);
-    }
-  }
-
-  // ===================================================================
   //  MAIN SESSION / SEND HANDLERS
   // ===================================================================
 
@@ -160,7 +122,8 @@ export class TelegramCommandHandler {
         return;
       }
       if (state.step === 'github-token' && state.workspaceId) {
-        await this.handleSetupCallback(chatId, userId, 'setup:githuntoken:done', text);
+        const cleaned = text.replace(/^\/git\s+login\s+/i, '');
+        await this.handleSetupCallback(chatId, userId, 'setup:githuntoken:done', cleaned);
         return;
       }
     }
@@ -248,8 +211,7 @@ export class TelegramCommandHandler {
               '  /workspace models <provider-id>\n' +
               '  /workspace model <provider/model>\n\n' +
               'Then log in to GitHub (optional):\n' +
-              '  /workspace github-login <name>   — OAuth flow\n' +
-              '  /workspace github-token <pat>  — Personal access token',
+              '  /git login <user> <token> <url>  — Set git credentials',
             );
             return;
           }
@@ -372,7 +334,7 @@ export class TelegramCommandHandler {
         case 'gh-token': {
           const token = rest.trim();
           if (!token) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /workspace github-token <token>\nGet a token from https://github.com/settings/tokens (needs repo scope)');
+            await this.notificationService.sendRaw(chatId, 'Usage: /workspace github-token <token>\nGet a token from your git provider.\nRecommended: /git login <username> <token> <remote-url>');
             return;
           }
           const ws = await this.workspaceService.getActive(userId);
@@ -380,30 +342,15 @@ export class TelegramCommandHandler {
             await this.notificationService.sendRaw(chatId, 'No active workspace. Switch first: /workspace switch <name>');
             return;
           }
-          try {
-            const login = await this.githubAuthService.setWorkspaceToken(ws.id, token);
-            await this.notificationService.sendRaw(chatId, `✅ Logged into GitHub as ${login} on workspace "${ws.name}"`);
-          } catch (err) {
-            await this.notificationService.sendRaw(chatId, `❌ Invalid token: ${(err as Error).message}`);
-          }
+          await this.notificationService.sendRaw(chatId, 'Use /git login instead:\n/git login <username> <token> <remote-url>\n\nExample:\n/git login myuser <token> https://github.com/org/repo.git');
           return;
         }
         case 'github-login':
         case 'gh-login': {
-          const ws = await this.workspaceService.findByName(rest, userId);
-          if (!ws) {
-            await this.notificationService.sendRaw(chatId, `Workspace "${rest}" not found. Usage: /workspace github-login <name>`);
-            return;
-          }
-          if (!this.githubAuthService.isConfigured()) {
-            await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured.\nUse /workspace github-token <pat> to set a personal access token instead.');
-            return;
-          }
-          const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
-          await this.notificationService.sendRawWithKeyboard(
+          await this.notificationService.sendRaw(
             chatId,
-            `Click below to authorize GitHub for workspace "${ws.name}":`,
-            Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
+            'GitHub OAuth has been removed. Use:\n/git login <username> <token> <remote-url>\n\n' +
+            'Example:\n/git login myuser ghp_abc123 https://github.com/org/repo.git',
           );
           return;
         }
@@ -480,17 +427,17 @@ export class TelegramCommandHandler {
           // If remote URL is provided, check GitHub auth first
           if (remoteUrl) {
             const creds = await this.workspaceService.getWorkspaceCredentials(active.id);
-            if (!creds.githubToken) {
+            if (!creds.gitToken) {
               await this.notificationService.sendRawWithKeyboard(
                 chatId,
-                '⚠️ Adding a project with a remote URL requires GitHub access.\n' +
-                'This workspace has no GitHub token configured.\n\n' +
-                'Options:\n' +
-                '  /workspace github-login <name>  — OAuth login\n' +
-                '  /workspace github-token <pat>  — Personal access token\n' +
-                '  Or use absolute path if the repo already exists',
+                '⚠️ Adding a project with a remote URL requires git credentials.\n' +
+                'This workspace has no git token configured.\n\n' +
+                'Set credentials:\n' +
+                '  /git login <username> <token> <remote-url>\n\n' +
+                'Example:\n' +
+                '  /git login myuser ghp_abc123 https://github.com/org/repo.git\n\n' +
+                'Or use an absolute path if the repo already exists.',
                 Markup.inlineKeyboard([
-                  [Markup.button.callback('🔑 GitHub Login', cb('ws:ghlogin', active.id))],
                   [Markup.button.callback('🔙 Cancel', cb('nav:main'))],
                 ]),
               );
@@ -702,13 +649,36 @@ export class TelegramCommandHandler {
     const sub = args[0].toLowerCase();
     const rest = args.slice(1).join(' ');
 
-    // Find a project to run on
     const active = await this.workspaceService.getActive(userId);
     if (!active) {
       await this.notificationService.sendRaw(chatId, 'No active workspace.');
       return;
     }
 
+    // Git credential sub-commands — don't need a git repo
+    if (sub === 'login' || sub === 'logout' || sub === 'credential-status' || sub === 'test') {
+      try {
+        switch (sub) {
+          case 'login':
+            await this.handleGitLoginCmd(chatId, userId, active.id, rest);
+            return;
+          case 'logout':
+            await this.handleGitLogoutCmd(chatId, userId, active.id);
+            return;
+          case 'credential-status':
+            await this.handleGitStatusCmd(chatId, userId, active.id);
+            return;
+          case 'test':
+            await this.handleGitTestCmd(chatId, userId, active.id, active.containerId ?? undefined);
+            return;
+        }
+      } catch (err) {
+        await this.notificationService.sendRaw(chatId, `Error: ${(err as Error).message}`);
+      }
+      return;
+    }
+
+    // Find a project to run on
     const projects = await this.workspaceService.getProjects(active.id);
     let gitPath: string | null = null;
     let projName = 'workspace';
@@ -769,12 +739,16 @@ export class TelegramCommandHandler {
           break;
         }
         case 'push': {
-          await this.gitCommandsService.push(gitPath);
+          const pushCreds = await this.workspaceService.getWorkspaceCredentials(active.id);
+          const pushGitCreds = pushCreds.gitToken && pushCreds.gitUsername ? { username: pushCreds.gitUsername, token: pushCreds.gitToken } : undefined;
+          await this.gitCommandsService.push(gitPath, undefined, undefined, active.containerId ?? undefined, pushGitCreds);
           await this.notificationService.sendRaw(chatId, `✅ Pushed (${projName})`);
           break;
         }
         case 'pull': {
-          await this.gitCommandsService.pull(gitPath);
+          const pullCreds = await this.workspaceService.getWorkspaceCredentials(active.id);
+          const pullGitCreds = pullCreds.gitToken && pullCreds.gitUsername ? { username: pullCreds.gitUsername, token: pullCreds.gitToken } : undefined;
+          await this.gitCommandsService.pull(gitPath, undefined, undefined, active.containerId ?? undefined, pullGitCreds);
           await this.notificationService.sendRaw(chatId, `✅ Pulled (${projName})`);
           break;
         }
@@ -790,8 +764,8 @@ export class TelegramCommandHandler {
             return;
           }
           const creds = await this.workspaceService.getWorkspaceCredentials(active.id);
-          if (!creds.githubToken) {
-            await this.notificationService.sendRaw(chatId, 'GitHub token not configured. Run /workspace github-login <name> first.');
+          if (!creds.gitToken) {
+            await this.notificationService.sendRaw(chatId, 'No git credentials configured.\n/git login <username> <token> <remote-url>');
             return;
           }
           try {
@@ -813,7 +787,212 @@ export class TelegramCommandHandler {
           await this.showGitMenu(chatId, userId);
       }
     } catch (err) {
-      await this.notificationService.sendRaw(chatId, `Git error: ${(err as Error).message}`);
+      const message = (err as Error).message;
+      if (this.gitAuthService.isGitAuthError(message) && active) {
+        await this.gitAuthService.removeCredentials(active.id);
+        await this.notificationService.sendRaw(
+          chatId,
+          `❌ Git operation failed — credentials rejected by server\n\n` +
+          `  Credentials have been cleared.\n\n` +
+          `Please set new credentials:\n` +
+          `  /git login <username> <token> <remote-url>\n\n` +
+          `Example:\n` +
+          `  /git login myuser <new-token> https://github.com/myorg/project.git`,
+        );
+      } else {
+        await this.notificationService.sendRaw(chatId, `Git error: ${message}`);
+      }
+    }
+  }
+
+  // ===================================================================
+  //  GIT CREDENTIAL HANDLERS
+  // ===================================================================
+
+  private async handleGitLoginCmd(chatId: string, userId: string, workspaceId: string, args: string): Promise<void> {
+    const parts = args.split(' ').filter(Boolean);
+    if (parts.length < 2) {
+      await this.notificationService.sendRaw(
+        chatId,
+        'Usage: /git login <username> <token> [remote-url]\n\n' +
+        'Examples:\n' +
+        '  /git login myuser ghp_abc123def456\n' +
+        '  /git login myuser ghp_abc123def456 https://github.com/myorg/project.git\n' +
+        '  /git login myuser glpat-xyz789 https://gitlab.company.com/team/repo.git',
+      );
+      return;
+    }
+
+    const username = parts[0];
+    const token = parts[1];
+    const remoteUrl = parts[2] || null;
+
+    // Determine remote URL: arg → project's remote → null
+    let validationUrl = remoteUrl;
+    if (!validationUrl) {
+      const projects = await this.workspaceService.getProjects(workspaceId);
+      const projectWithRemote = projects.find(p => p.remoteUrl);
+      if (projectWithRemote) {
+        validationUrl = projectWithRemote.remoteUrl!;
+      }
+    }
+
+    if (!validationUrl) {
+      // Store without validation
+      const result = await this.gitAuthService.setWorkspaceCredentials(workspaceId, username, token);
+      await this.notificationService.sendRaw(
+        chatId,
+        `✅ Git credentials stored for *${result.username}*\nToken: ${result.tokenMasked}\n\n` +
+        'No remote URL provided — validation skipped. Add a project with a remote URL to verify:\n' +
+        '  /project add <name> <path> <remote-url>\n\n' +
+        'Example:\n' +
+        '  /project add frontend . https://github.com/myorg/project.git',
+      );
+      return;
+    }
+
+    // Validate
+    await this.notificationService.sendRaw(
+      chatId,
+      `⏳ Validating git credentials...\n\n` +
+      `  Testing: git ls-remote ${validationUrl.replace(/https?:\/\//, 'https://***@')}\n` +
+      `  Username: ${username}\n` +
+      `  Token: ${this.gitAuthService.maskToken(token)}`,
+    );
+
+    const active = await this.workspaceService.findById(workspaceId, userId);
+    const containerId = active?.containerId ?? undefined;
+    const result = await this.gitAuthService.validateToken(validationUrl, username, token, containerId);
+
+    if (result.valid) {
+      const stored = await this.gitAuthService.setWorkspaceCredentials(workspaceId, username, token);
+      await this.notificationService.sendRaw(
+        chatId,
+        `✅ Git credentials verified!\n\n` +
+        `  Username:  ${stored.username}\n` +
+        `  Token:     ${stored.tokenMasked}\n` +
+        `  Remote:    ${validationUrl}\n` +
+        `  Test:      ✔ git ls-remote succeeded (${result.refCount} refs found)\n\n` +
+        `Try: /git status\n` +
+        `Try: /git pull`,
+      );
+    } else {
+      const hints: Record<string, string> = {
+        auth: '\n  • Token is expired or revoked — generate a new one\n  • Token lacks access to this repository\n  • Username doesn\'t match the token',
+        network: '\n  • Remote URL may be incorrect\n  • Host is unreachable — check DNS/firewall\n  • Repository does not exist',
+      };
+
+      await this.notificationService.sendRaw(
+        chatId,
+        `❌ Authentication failed\n\n` +
+        `  ${result.errorMessage}\n` +
+        `  Remote: ${validationUrl}\n` +
+        (hints[result.errorType ?? ''] ?? '\n  • Unknown error — check the remote URL and token') +
+        `\n\nExamples to try:\n` +
+        `  /git login ${username} <new-token> ${validationUrl}\n` +
+        `  /git login ${username} <new-token> https://github.com/org/repo.git\n\n` +
+        `💡 GitHub tokens need "repo" scope for private repos\n` +
+        `💡 GitLab tokens need "read_repository" scope at minimum`,
+      );
+    }
+  }
+
+  private async handleGitLogoutCmd(chatId: string, userId: string, workspaceId: string): Promise<void> {
+    const status = await this.gitAuthService.getCredentialsStatus(workspaceId);
+    if (!status.isSet) {
+      await this.notificationService.sendRaw(chatId, 'No git credentials configured on this workspace.');
+      return;
+    }
+
+    await this.gitAuthService.removeCredentials(workspaceId);
+    await this.notificationService.sendRaw(
+      chatId,
+      `✅ Git credentials removed\n\n` +
+      `  Workspace "${status.workspaceName}" no longer has git authentication.\n\n` +
+      `To set up new credentials:\n` +
+      `  /git login <username> <token> <remote-url>\n\n` +
+      `Example:\n` +
+      `  /git login ${status.username} <new-token> https://github.com/myorg/project.git`,
+    );
+  }
+
+  private async handleGitStatusCmd(chatId: string, userId: string, workspaceId: string): Promise<void> {
+    const status = await this.gitAuthService.getCredentialsStatus(workspaceId);
+
+    if (!status.isSet) {
+      await this.notificationService.sendRaw(
+        chatId,
+        '🔑 Git Credentials — Not configured\n\n' +
+        'To connect to git repositories, set up credentials:\n' +
+        '  /git login <username> <token> <remote-url>\n\n' +
+        'Examples:\n' +
+        '  /git login myuser ghp_abc123def456\n' +
+        '  /git login myuser ghp_abc123def456 https://github.com/myorg/project.git\n' +
+        '  /git login myuser glpat-xyz789 https://gitlab.com/mygroup/repo.git\n\n' +
+        '💡 Getting a token:\n' +
+        '  • GitHub:    https://github.com/settings/tokens (needs "repo" scope)\n' +
+        '  • GitLab:    https://gitlab.com/-/user_settings/personal_access_tokens\n' +
+        '  • Bitbucket: https://bitbucket.org/account/settings/app-passwords/\n' +
+        '  • Self-hosted: Check your admin for the token URL',
+      );
+      return;
+    }
+
+    await this.notificationService.sendRaw(
+      chatId,
+      `🔍 Git Credential Status\n\n` +
+      `  Workspace:  ${status.workspaceName}\n` +
+      `  Status:     ✅ Active\n\n` +
+      `  Username:   ${status.username}\n` +
+      `  Token:      ${status.tokenMasked}\n` +
+      `  Remote:     ${status.remoteUrl ?? 'not set'}\n` +
+      `  Last verified: (not tracked)\n\n` +
+      `/git test              — Re-validate credentials now\n` +
+      `/git logout            — Remove credentials\n` +
+      `/git credential-status — Show this credential info`,
+    );
+  }
+
+  private async handleGitTestCmd(chatId: string, userId: string, workspaceId: string, containerId?: string): Promise<void> {
+    const status = await this.gitAuthService.getCredentialsStatus(workspaceId);
+    if (!status.isSet) {
+      await this.notificationService.sendRaw(
+        chatId,
+        'No git credentials configured.\n/git login <username> <token> <remote-url>',
+      );
+      return;
+    }
+
+    await this.notificationService.sendRaw(
+      chatId,
+      `⏳ Re-validating credentials for ${status.username}...`,
+    );
+
+    const result = await this.gitAuthService.testCredentials(workspaceId, containerId);
+
+    if (result.valid) {
+      await this.notificationService.sendRaw(
+        chatId,
+        `✅ Credentials still valid for ${status.username}\n` +
+        `  git ls-remote succeeded (${result.refCount} refs found)`,
+      );
+    } else if (result.errorType === 'auth') {
+      await this.gitAuthService.removeCredentials(workspaceId);
+      await this.notificationService.sendRaw(
+        chatId,
+        `❌ Git credentials rejected — token may be expired or revoked\n\n` +
+        `  Credentials for "${status.username}" have been cleared.\n\n` +
+        `Set new credentials:\n` +
+        `  /git login ${status.username} <new-token> <remote-url>\n\n` +
+        `Example:\n` +
+        `  /git login ${status.username} <new-token> https://github.com/myorg/project.git`,
+      );
+    } else {
+      await this.notificationService.sendRaw(
+        chatId,
+        `❌ Validation failed: ${result.errorMessage}\n` +
+        `  /git login ${status.username} <new-token> <remote-url>`,
+      );
     }
   }
 
@@ -1194,20 +1373,10 @@ export class TelegramCommandHandler {
         break;
       }
       case 'ws:ghlogin': {
-        const ws = await this.workspaceService.findById(value, userId);
-        if (!ws) {
-          await this.notificationService.sendRaw(chatId, 'Workspace not found.');
-          return;
-        }
-        if (!this.githubAuthService.isConfigured()) {
-          await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured.\nUse /workspace github-token <pat> to set a personal access token instead.');
-          return;
-        }
-        const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
-        await this.notificationService.sendRawWithKeyboard(
+        await this.notificationService.sendRaw(
           chatId,
-          `Click below to authorize GitHub for workspace "${ws.name}":`,
-          Markup.inlineKeyboard([Markup.button.url('Authorize GitHub', url)]),
+          'GitHub OAuth has been removed. Use:\n/git login <username> <token> <remote-url>\n\n' +
+          'Example:\n/git login myuser ghp_abc123 https://github.com/org/repo.git',
         );
         break;
       }
@@ -1327,12 +1496,18 @@ export class TelegramCommandHandler {
           break;
         }
         case 'git:push': {
-          await this.gitCommandsService.push(project.gitPath);
+          const pushCreds = await this.workspaceService.getWorkspaceCredentials(project.workspaceId);
+          const pushGitCreds = pushCreds.gitToken && pushCreds.gitUsername ? { username: pushCreds.gitUsername, token: pushCreds.gitToken } : undefined;
+          const pushWs = await this.workspaceService.findById(project.workspaceId);
+          await this.gitCommandsService.push(project.gitPath, undefined, undefined, pushWs?.containerId ?? undefined, pushGitCreds);
           await this.notificationService.sendRaw(chatId, `✅ Pushed (${project.name})`);
           break;
         }
         case 'git:pull': {
-          await this.gitCommandsService.pull(project.gitPath);
+          const pullCreds = await this.workspaceService.getWorkspaceCredentials(project.workspaceId);
+          const pullGitCreds = pullCreds.gitToken && pullCreds.gitUsername ? { username: pullCreds.gitUsername, token: pullCreds.gitToken } : undefined;
+          const pullWs = await this.workspaceService.findById(project.workspaceId);
+          await this.gitCommandsService.pull(project.gitPath, undefined, undefined, pullWs?.containerId ?? undefined, pullGitCreds);
           await this.notificationService.sendRaw(chatId, `✅ Pulled (${project.name})`);
           break;
         }
@@ -1480,59 +1655,45 @@ export class TelegramCommandHandler {
         break;
       }
       case 'setup:model': {
-        // Model was selected via the model picker callback — already handled by handleModelCallback
         state.step = 'github';
-        const githubBtn = this.githubAuthService.isConfigured()
-          ? Markup.button.callback('🔑 GitHub OAuth', cb('setup:github', state.workspaceId))
-          : Markup.button.callback('🔑 Enter Token', cb('setup:githuntoken', state.workspaceId));
         await this.notificationService.sendRawWithKeyboard(
           chatId,
-          '✅ Model selected!\n\n*Step 4/4: GitHub Login (optional)*\n\nConnect GitHub to manage repositories and create PRs.',
+          '✅ Model selected!\n\n*Step 4/4: Git Login (optional)*\n\n' +
+          'Connect git to manage repositories and create PRs.\n\n' +
+          'Use /git login or tap "Enter Credentials":',
           Markup.inlineKeyboard([
-            [githubBtn],
+            [Markup.button.callback('🔑 Enter Credentials', cb('setup:githuntoken', state.workspaceId))],
             [Markup.button.callback('⏭ Skip', cb('setup:done', ''))],
           ]),
         );
-        break;
-      }
-      case 'setup:github': {
-        if (!this.githubAuthService.isConfigured()) {
-          await this.notificationService.sendRawWithKeyboard(
-            chatId,
-            '*Step 4/4: GitHub Login (optional)*\n\n' +
-            'GitHub OAuth not configured. You can use a personal access token or skip.',
-            Markup.inlineKeyboard([
-              [Markup.button.callback('🔑 Enter Token', cb('setup:githuntoken', state.workspaceId))],
-              [Markup.button.callback('⏭ Skip', cb('setup:done', ''))],
-            ]),
-          );
-          return;
-        }
-        const url = this.githubAuthService.generateAuthUrl(userId, chatId, state.workspaceId);
-        await this.notificationService.sendRawWithKeyboard(
-          chatId,
-          'Click below to authorize GitHub:',
-          Markup.inlineKeyboard([Markup.button.url('🔑 Authorize GitHub', url)]),
-        );
-        // Don't clear state yet — wait for callback
         break;
       }
       case 'setup:githuntoken': {
         state.step = 'github-token';
         await this.notificationService.sendRaw(
           chatId,
-          '📋 *GitHub Token*\n\nSend your GitHub personal access token as a message.\n' +
-          'Get one at https://github.com/settings/tokens (needs *repo* scope).\n\n' +
-          'Or send /cancel to skip.',
+          '📋 *Git Login — Step 4/4*\n\n' +
+          'Send your git credentials as:\n' +
+          '  /git login <username> <token> <remote-url>\n\n' +
+          'Examples:\n' +
+          '  GitHub:   /git login myuser ghp_abc123 https://github.com/org/repo.git\n' +
+          '  GitLab:   /git login myuser glpat-xyz789 https://gitlab.com/group/repo.git\n' +
+          '  Bitbucket:/git login myuser app-password https://bitbucket.org/team/repo.git\n\n' +
+          'Or run /cancel to skip this step.',
         );
         break;
       }
       case 'setup:githuntoken:done': {
         try {
-          const login = await this.githubAuthService.setWorkspaceToken(state.workspaceId, value);
-          await this.notificationService.sendRaw(chatId, `✅ Logged into GitHub as ${login}`);
+          const parts = value.split(' ').filter(Boolean);
+          const username = parts[0] || 'user';
+          const token = parts[1] || value;
+          const result = await this.gitAuthService.setWorkspaceCredentials(
+            state.workspaceId, username, token,
+          );
+          await this.notificationService.sendRaw(chatId, `✅ Git credentials stored (${result.tokenMasked})`);
         } catch (err) {
-          await this.notificationService.sendRaw(chatId, `❌ Invalid token: ${(err as Error).message}. You can retry with /workspace github-token.`);
+          await this.notificationService.sendRaw(chatId, `❌ Error: ${(err as Error).message}. You can retry with /git login.`);
         }
         this.setupWizardState.delete(userId);
         await this.notificationService.sendRaw(chatId, '✅ *Setup complete!*\n\nTry:\n  /project add <name> <path> <remote-url>\n  Or just send a prompt to start a session.');
@@ -1686,7 +1847,7 @@ export class TelegramCommandHandler {
       '',
       '*Session*',
       '/session <prompt> — Start session',
-      '/send <text> — Send text to active session',  
+      '/send <text> — Send text to active session',
       '/sessions — List / switch sessions',
       '/cancel — Cancel session',
       '',
@@ -1698,17 +1859,54 @@ export class TelegramCommandHandler {
       '/ctrl_c — Interrupt (Ctrl+C)',
       '',
       '*OpenCode Control*',
-      '/model <name> — Switch model',
-      '/skill <name> — Load skill',
+      '/model <name> — Switch model (in-session)',
+      '/skill <name> — Load skill (in-session)',
+      '/opencode <args> — Send text to active session (alias for /send)',
       '',
-      '*Git*',
-      '/git status/diff/add/commit/push/pull/log',
+      '*Setup*',
+      '/setup — Guided setup wizard (provider, model, git)',
+      '',
+      '*Git Credentials*',
+      '/git login <user> <token> [url] — Set git credentials',
+      '  Example: /git login alice ghp_xxx https://github.com/org/repo.git',
+      '/git logout — Remove credentials',
+      '/git credential-status — Show credential info',
+      '/git test — Re-validate credentials',
+      '',
+      '*Git Operations (on active project)*',
+      '/git status — Show repo status (branch, changes)',
+      '/git diff — Show unstaged changes',
+      '/git add — Stage all changes',
+      '/git commit <msg> — Commit staged changes',
+      '/git push — Push to remote',
+      '/git pull — Pull from remote',
+      '/git log — Show recent commits',
+      '/git pr — Create PR with gh CLI',
       '',
       '*Workspace*',
-      '/workspace create <name> / list / switch / show',
-      '/project add/list/edit/delete',
-      '/workspace github-login <name> — OAuth login',
-      '/workspace github-token <pat> — Token login',
+      '/workspace create <name> — Create workspace',
+      '/workspace list — List workspaces',
+      '/workspace switch <name> — Switch active workspace',
+      '/workspace show — Show active workspace details',
+      '/workspace rename <old> <new> — Rename workspace',
+      '/workspace delete <name> — Delete workspace',
+      '/workspace provider <id> <key> — Set AI provider',
+      '/workspace models <provider> — List models',
+      '/workspace model <provider/model> — Set default model',
+      '/workspace sync <name> — Sync git projects',
+      '/workspace github-token <token> — Set git token (deprecated, use /git login)',
+      '',
+      '*Project*',
+      '/project add <name> <path> [url] — Add git project',
+      '/project list — List projects',
+      '/project edit <name> (name:|path:) — Edit project',
+      '/project delete <name> — Delete project',
+      '/project branches <name> — List branches',
+      '/project switch <name> <branch> — Switch branch',
+      '/project install <name> — Install dependencies',
+      '/project provider <id> <key> — Set provider (per project)',
+      '/project models <provider> — List models (per project)',
+      '/project model <provider/model> — Set model (per project)',
       ].join('\n'),
     );
   }

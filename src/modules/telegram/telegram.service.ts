@@ -141,17 +141,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.handler.handleKeyCmd(this.toContext(ctx), 'ctrl+c');
     });
 
-    // ── GitHub Auth ────────────────────────────────────────────────
-    bot.command('login', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleLoginCmd(this.toContext(ctx), this.getArgs(ctx));
-    });
-
-    bot.command('logout', async (ctx) => {
-      if (!this.isAuthorized(ctx.from?.id)) return;
-      await this.handler.handleLogoutCmd(this.toContext(ctx), this.getArgs(ctx));
-    });
-
     // ── Help ───────────────────────────────────────────────────────
     bot.command('help', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;

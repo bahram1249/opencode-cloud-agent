@@ -265,8 +265,8 @@ export class SessionService {
       providerId: workspace.providerId,
       apiKey: creds.apiKey,
       model: dto.model ?? workspace.model,
-      githubToken: creds.githubToken,
-      githubLogin: creds.githubLogin,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
     });
     if (!ensuredContainerId) {
       throw new BadRequestException(
@@ -275,7 +275,17 @@ export class SessionService {
     }
     const spawnCommand = 'docker';
     const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
-    const spawnArgs = this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs);
+    const execEnv = this.dockerWorkspaces.buildProviderEnv({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenantId,
+      workDir: workspace.workDir,
+      providerId: workspace.providerId,
+      apiKey: creds.apiKey,
+      model: dto.model ?? workspace.model,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
+    });
+    const spawnArgs = this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs, execEnv);
     const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
@@ -388,7 +398,18 @@ export class SessionService {
           throw new BadRequestException('Workspace has no container; cannot spawn follow-up PTY.');
         }
         const spawnCommand = 'docker';
-        const spawnArgs = this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text]);
+        const creds = await this.workspaceService.getWorkspaceCredentials(workspace.id);
+        const execEnv = this.dockerWorkspaces.buildProviderEnv({
+          workspaceId: workspace.id,
+          tenantId: workspace.tenantId,
+          workDir: workspace.workDir,
+          providerId: workspace.providerId,
+          apiKey: creds.apiKey,
+          model: workspace.model,
+          gitToken: creds.gitToken,
+          gitUsername: creds.gitUsername,
+        });
+        const spawnArgs = this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text], execEnv);
         const newPty = pty.spawn(spawnCommand, spawnArgs, {
           name: 'xterm-color',
           cols: 120,
