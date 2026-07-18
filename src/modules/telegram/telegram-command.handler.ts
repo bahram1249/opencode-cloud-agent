@@ -117,7 +117,7 @@ export class TelegramCommandHandler {
     }
 
     if (!this.githubAuthService.isConfigured()) {
-      await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+      await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured.\nUse /workspace github-token <name> <pat> to set a personal access token on a workspace.');
       return;
     }
 
@@ -147,11 +147,22 @@ export class TelegramCommandHandler {
 
   /** Called when user sends plain text. Routes to session or starts one. */
   async handleTextInput(chatId: string, userId: string, text: string): Promise<void> {
-    // Check if user is in setup wizard awaiting API key
+    // Check if user is in setup wizard awaiting input
     const state = this.setupWizardState.get(userId);
-    if (state && state.step === 'api-key' && state.providerId) {
-      await this.handleSetupCallback(chatId, userId, 'setup:apikey', text);
-      return;
+    if (state) {
+      if (text.trim().toLowerCase() === '/cancel') {
+        this.setupWizardState.delete(userId);
+        await this.notificationService.sendRaw(chatId, 'Setup cancelled.');
+        return;
+      }
+      if (state.step === 'api-key' && state.providerId) {
+        await this.handleSetupCallback(chatId, userId, 'setup:apikey', text);
+        return;
+      }
+      if (state.step === 'github-token' && state.workspaceId) {
+        await this.handleSetupCallback(chatId, userId, 'setup:githuntoken:done', text);
+        return;
+      }
     }
 
     const existing = this.sessionService.getUserSession(userId);
@@ -237,7 +248,8 @@ export class TelegramCommandHandler {
               '  /workspace models <provider-id>\n' +
               '  /workspace model <provider/model>\n\n' +
               'Then log in to GitHub (optional):\n' +
-              '  /workspace github-login <name>',
+              '  /workspace github-login <name>   — OAuth flow\n' +
+              '  /workspace github-token <name> <pat>  — Personal access token',
             );
             return;
           }
@@ -356,6 +368,41 @@ export class TelegramCommandHandler {
           await this.notificationService.sendRaw(chatId, `Sync results for "${ws.name}":\n${lines.join('\n')}`);
           return;
         }
+        case 'github-token':
+        case 'gh-token': {
+          // Support two forms:
+          //   /workspace github-token <token>          — uses active workspace
+          //   /workspace github-token <name> <token>   — specific workspace
+          const parts = rest.trim().split(/\s+/);
+          if (parts.length === 0) {
+            await this.notificationService.sendRaw(chatId, 'Usage:\n  /workspace github-token <token>\n  /workspace github-token <name> <token>\nGet a token from https://github.com/settings/tokens (needs repo scope)');
+            return;
+          }
+          let ws;
+          let token: string;
+          if (parts.length === 1) {
+            token = parts[0];
+            ws = await this.workspaceService.getActive(userId);
+            if (!ws) {
+              await this.notificationService.sendRaw(chatId, 'No active workspace. Specify workspace name:\n  /workspace github-token <name> <token>');
+              return;
+            }
+          } else {
+            ws = await this.workspaceService.findByName(parts[0], userId);
+            token = parts.slice(1).join(' ');
+            if (!ws) {
+              await this.notificationService.sendRaw(chatId, `Workspace "${parts[0]}" not found.`);
+              return;
+            }
+          }
+          try {
+            const login = await this.githubAuthService.setWorkspaceToken(ws.id, token);
+            await this.notificationService.sendRaw(chatId, `✅ Logged into GitHub as ${login} on workspace "${ws.name}"`);
+          } catch (err) {
+            await this.notificationService.sendRaw(chatId, `❌ Invalid token: ${(err as Error).message}`);
+          }
+          return;
+        }
         case 'github-login':
         case 'gh-login': {
           const ws = await this.workspaceService.findByName(rest, userId);
@@ -364,7 +411,7 @@ export class TelegramCommandHandler {
             return;
           }
           if (!this.githubAuthService.isConfigured()) {
-            await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+            await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured.\nUse /workspace github-token <name> <token> instead.');
             return;
           }
           const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
@@ -454,7 +501,8 @@ export class TelegramCommandHandler {
                 '⚠️ Adding a project with a remote URL requires GitHub access.\n' +
                 'This workspace has no GitHub token configured.\n\n' +
                 'Options:\n' +
-                '  /workspace github-login <name>  — Log in to GitHub\n' +
+                '  /workspace github-login <name>  — OAuth login\n' +
+                '  /workspace github-token <name> <pat>  — Personal access token\n' +
                 '  Or use absolute path if the repo already exists',
                 Markup.inlineKeyboard([
                   [Markup.button.callback('🔑 GitHub Login', cb('ws:ghlogin', active.id))],
@@ -1167,7 +1215,7 @@ export class TelegramCommandHandler {
           return;
         }
         if (!this.githubAuthService.isConfigured()) {
-          await this.notificationService.sendRaw(chatId, 'GitHub OAuth is not configured (missing GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).');
+          await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured.\nUse /workspace github-token <name> <pat> to set a personal access token instead.');
           return;
         }
         const url = this.githubAuthService.generateAuthUrl(userId, chatId, ws.id);
@@ -1373,7 +1421,7 @@ export class TelegramCommandHandler {
   // ===================================================================
 
   private readonly setupWizardState = new Map<string, {
-    step: 'provider' | 'api-key' | 'models' | 'github';
+    step: 'provider' | 'api-key' | 'models' | 'github' | 'github-token';
     workspaceId: string;
     providerId?: string;
   }>();
@@ -1449,11 +1497,14 @@ export class TelegramCommandHandler {
       case 'setup:model': {
         // Model was selected via the model picker callback — already handled by handleModelCallback
         state.step = 'github';
+        const githubBtn = this.githubAuthService.isConfigured()
+          ? Markup.button.callback('🔑 GitHub OAuth', cb('setup:github', state.workspaceId))
+          : Markup.button.callback('🔑 Enter Token', cb('setup:githuntoken', state.workspaceId));
         await this.notificationService.sendRawWithKeyboard(
           chatId,
           '✅ Model selected!\n\n*Step 4/4: GitHub Login (optional)*\n\nConnect GitHub to manage repositories and create PRs.',
           Markup.inlineKeyboard([
-            [Markup.button.callback('🔑 GitHub Login', cb('setup:github', state.workspaceId))],
+            [githubBtn],
             [Markup.button.callback('⏭ Skip', cb('setup:done', ''))],
           ]),
         );
@@ -1461,8 +1512,15 @@ export class TelegramCommandHandler {
       }
       case 'setup:github': {
         if (!this.githubAuthService.isConfigured()) {
-          await this.notificationService.sendRaw(chatId, 'GitHub OAuth not configured. Skipping...\n\n✅ *Setup complete!* Next: /project add <name> <path> <remote-url>');
-          this.setupWizardState.delete(userId);
+          await this.notificationService.sendRawWithKeyboard(
+            chatId,
+            '*Step 4/4: GitHub Login (optional)*\n\n' +
+            'GitHub OAuth not configured. You can use a personal access token or skip.',
+            Markup.inlineKeyboard([
+              [Markup.button.callback('🔑 Enter Token', cb('setup:githuntoken', state.workspaceId))],
+              [Markup.button.callback('⏭ Skip', cb('setup:done', ''))],
+            ]),
+          );
           return;
         }
         const url = this.githubAuthService.generateAuthUrl(userId, chatId, state.workspaceId);
@@ -1472,6 +1530,27 @@ export class TelegramCommandHandler {
           Markup.inlineKeyboard([Markup.button.url('🔑 Authorize GitHub', url)]),
         );
         // Don't clear state yet — wait for callback
+        break;
+      }
+      case 'setup:githuntoken': {
+        state.step = 'github-token';
+        await this.notificationService.sendRaw(
+          chatId,
+          '📋 *GitHub Token*\n\nSend your GitHub personal access token as a message.\n' +
+          'Get one at https://github.com/settings/tokens (needs *repo* scope).\n\n' +
+          'Or send /cancel to skip.',
+        );
+        break;
+      }
+      case 'setup:githuntoken:done': {
+        try {
+          const login = await this.githubAuthService.setWorkspaceToken(state.workspaceId, value);
+          await this.notificationService.sendRaw(chatId, `✅ Logged into GitHub as ${login}`);
+        } catch (err) {
+          await this.notificationService.sendRaw(chatId, `❌ Invalid token: ${(err as Error).message}. You can retry with /workspace github-token.`);
+        }
+        this.setupWizardState.delete(userId);
+        await this.notificationService.sendRaw(chatId, '✅ *Setup complete!*\n\nTry:\n  /project add <name> <path> <remote-url>\n  Or just send a prompt to start a session.');
         break;
       }
       case 'setup:done': {

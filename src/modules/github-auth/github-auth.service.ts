@@ -130,6 +130,22 @@ export class GitHubAuthService {
     });
   }
 
+  async setWorkspaceToken(workspaceId: string, token: string): Promise<string> {
+    const user = await this.fetchGitHubUser(token);
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { githubToken: token, githubLogin: user.login },
+    });
+    return user.login;
+  }
+
+  async revokeWorkspaceToken(workspaceId: string): Promise<void> {
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { githubToken: null, githubLogin: null },
+    });
+  }
+
   private async exchangeCode(code: string): Promise<GitHubTokenResponse> {
     const { data } = await axios.post<GitHubTokenResponse>(
       'https://github.com/login/oauth/access_token',
