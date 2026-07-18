@@ -191,7 +191,7 @@ export class SessionService {
   ) {
     // Ensure node-pty native binaries are executable (npm install sometimes drops perms)
     try {
-      const ptyDir = resolve(__dirname, '..', '..', '..', 'node_modules', 'node-pty', 'prebuilds', `${process.platform}-${process.arch}`);
+      const ptyDir = resolve(__dirname, '..', '..', '..', '..', 'node_modules', 'node-pty', 'prebuilds', `${process.platform}-${process.arch}`);
       const helper = resolve(ptyDir, 'spawn-helper');
       chmodSync(helper, 0o755);
       const native = resolve(ptyDir, 'pty.node');
