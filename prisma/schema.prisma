@@ -54,7 +54,6 @@ model WorkspaceProject {
   path           String   @default(".")
   branch         String   @default("main")
   remoteUrl      String?
-  provider       String?
   autoInstall    Boolean  @default(true)
   installCommand String?
   enabled        Boolean  @default(true)

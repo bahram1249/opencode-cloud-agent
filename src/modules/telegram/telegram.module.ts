@@ -7,7 +7,7 @@ import { TelegramSessionHandler } from './handlers/telegram-session.handler';
 import { TelegramWorkspaceHandler } from './handlers/telegram-workspace.handler';
 import { TelegramProjectHandler } from './handlers/telegram-project.handler';
 import { TelegramGitHandler } from './handlers/telegram-git.handler';
-import { TelegramSetupHandler } from './handlers/telegram-setup.handler';
+
 import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
 import { NotificationModule } from '../notification/notification.module';
 import { WorkspaceModule } from '../workspace/workspace.module';
@@ -23,7 +23,7 @@ import { GitAuthModule } from '../git-auth/git-auth.module';
   controllers: [TelegramController],
   providers: [
     TelegramBotService, TelegramService, TelegramCommandHandler, TelegramAuthGuard,
-    TelegramSessionHandler, TelegramWorkspaceHandler, TelegramProjectHandler, TelegramGitHandler, TelegramSetupHandler,
+    TelegramSessionHandler, TelegramWorkspaceHandler, TelegramProjectHandler, TelegramGitHandler,
   ],
   exports: [TelegramService, TelegramBotService],
 })

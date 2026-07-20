@@ -4,18 +4,37 @@ import type { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import type { SessionService, ActiveSession } from 'src/modules/session/session.service';
 import { cb } from '../utils/telegram-callback.utils';
 
+const PROVIDER_ICONS: Record<string, string> = {
+  opencode: '🔵',
+  openai: '🟢',
+  anthropic: '🟣',
+  'github-copilot': '⚫',
+};
+
+function providerIcon(providerId?: string | null): string {
+  return providerId ? (PROVIDER_ICONS[providerId] ?? '🔵') : '⚪';
+}
+
+function gitBadge(gitToken?: string | null): string {
+  return gitToken ? '🔑✓' : '🔑✗';
+}
+
 export interface MenuServices {
   notificationService: NotificationService;
   workspaceService: WorkspaceService;
   sessionService: SessionService;
+  refWs?: (wsId: string) => string;
 }
 
 export async function showMainMenu(chatId: string, userId: string, svc: MenuServices): Promise<void> {
   const session = svc.sessionService.getUserSession(userId);
   const active = await svc.workspaceService.getActive(userId);
-  const wsName = active ? `${active.name} (${active.workDir})` : 'None';
 
-  let text = `📌 *Workspace:* ${wsName}\n`;
+  const wsLine = active
+    ? `📌 *Workspace:* ${active.name} ${providerIcon(active.providerId)}${active.providerId ?? ''}`
+    : '📌 *Workspace:* None';
+
+  let text = `${wsLine}\n`;
   if (session) {
     text += `⚡ *Session:* ${session.publicId} (active)\n\nSend text to interact, or use the buttons below.`;
   } else {
@@ -65,19 +84,22 @@ export async function showWorkspaceMenu(chatId: string, userId: string, svc: Men
   const all = await svc.workspaceService.findAll(userId);
   const active = await svc.workspaceService.getActive(userId);
 
-  const buttons = all.slice(0, 8).map((w) => [
-    Markup.button.callback(
-      `${w.active ? '✅ ' : ''}${w.name}`,
-      cb('ws:show', w.id),
-    ),
-  ]);
+  const buttons = all.slice(0, 8).map((w) => {
+    const icon = providerIcon(w.providerId);
+    const modelLabel = w.model ? `🤖${w.model.split('/').pop()}` : '—';
+    const projCount = w.projects.length;
+    const gitIcon = gitBadge(w.gitToken);
+    const ref = svc.refWs ? svc.refWs(w.id) : w.id;
+    const label = `${w.active ? '✅ ' : '   '}${w.name} ${icon} ${modelLabel} 📁${projCount} ${gitIcon}`;
+    return [Markup.button.callback(label, cb('ws:show', ref))];
+  });
   buttons.push([Markup.button.callback('➕ New Workspace', cb('ws:create'))]);
   buttons.push([Markup.button.callback('🔙 Main Menu', cb('nav:main'))]);
 
   const activeName = active ? active.name : 'None';
   await svc.notificationService.sendRawWithKeyboard(
     chatId,
-    `📋 *Workspaces*\nActive: ${activeName}\n\nTap a workspace to see details and switch:`,
+    `📋 *Workspaces*\nActive: ${activeName}\n\nTap a workspace to manage it:`,
     Markup.inlineKeyboard(buttons),
   );
 }
@@ -138,40 +160,85 @@ export async function showSessionContext(
   );
 }
 
-export async function sendWorkspaceDetails(
+interface WorkspaceSettingsData {
+  id: string;
+  name: string;
+  workDir: string;
+  active: boolean;
+  providerId?: string | null;
+  model?: string | null;
+  projects: Array<{ id: string; name: string; gitPath: string; branch: string; path?: string }>;
+  gitToken?: string | null;
+  gitUsername?: string | null;
+  sessionCount: number;
+}
+
+export async function showWorkspaceSettings(
   chatId: string,
-  ws: {
-    id: string;
-    name: string;
-    workDir: string;
-    active: boolean;
-    providerId?: string | null;
-    model?: string | null;
-    projects: Array<{ id: string; name: string; gitPath: string; branch: string; path?: string }>;
-  },
+  messageId: number,
+  ws: WorkspaceSettingsData,
   svc: MenuServices,
 ): Promise<void> {
-  const projList = ws.projects.map((p) => `• ${p.name} — ${p.path ?? '.'}`).join('\n') || '  No projects';
+  const icon = providerIcon(ws.providerId);
+  const providerLine = ws.providerId
+    ? `${icon} *Provider:* ${ws.providerId}`
+    : `⚪ *Provider:* not configured`;
+
+  const modelLine = ws.model
+    ? `🤖 *Model:* ${ws.model}`
+    : `🤖 *Model:* not selected`;
+
+  const projCount = ws.projects.length;
+  const projectsLine = `📁 *Projects:* ${projCount}`;
+
+  const gitLine = ws.gitToken
+    ? `🔑 *Git:* ✅ ${ws.gitUsername ?? 'logged in'}`
+    : `🔑 *Git:* not configured`;
+
+  const sessionLine = `⚡ *Sessions:* ${ws.sessionCount}`;
+
+  const text = [
+    `⚙️ *Settings — ${ws.name}*${ws.active ? ' (active)' : ''}`,
+    ``,
+    providerLine,
+    modelLine,
+    projectsLine,
+    gitLine,
+    sessionLine,
+  ].join('\n');
+
+  const refId = svc.refWs ? svc.refWs(ws.id) : ws.id;
 
   const rows: Array<Array<ReturnType<typeof Markup.button.callback>>> = [];
 
   rows.push([
-    Markup.button.callback('📁 Add Project', cb('ws:addproj', ws.id)),
-    Markup.button.callback('🤖 Pick Model', cb('ws:models', ws.id)),
+    Markup.button.callback('🔵 Change Provider', cb('ws:setting:provider', refId)),
+    Markup.button.callback('🤖 Change Model', cb('ws:models', refId)),
+  ]);
+  rows.push([
+    Markup.button.callback('📁 Manage Projects', cb('ws:setting:projects', refId)),
+    Markup.button.callback('🔑 Manage Git', cb('ws:setting:git', refId)),
+  ]);
+  rows.push([
+    Markup.button.callback('⚡ Sessions', cb('ws:setting:sessions', refId)),
   ]);
 
   if (!ws.active) {
-    rows.push([Markup.button.callback('✅ Set Active', cb('ws:set', ws.id))]);
+    rows.push([Markup.button.callback('✅ Set Active', cb('ws:set', refId))]);
   }
-  rows.push([
-    Markup.button.callback('✏️ Rename', cb('ws:rename', ws.id)),
-    Markup.button.callback('🗑️ Delete', cb('ws:delete', ws.id)),
-  ]);
-  rows.push([Markup.button.callback('🔙 Workspaces', cb('nav:ws'))]);
 
-  await svc.notificationService.sendRawWithKeyboard(
-    chatId,
-    `📋 *${ws.name}*${ws.active ? ' (active)' : ''}\nPath: ${ws.workDir}\nProvider: ${ws.providerId ?? 'not configured'}\nModel: ${ws.model ?? 'not selected'}\n\nProjects:\n${projList}`,
-    Markup.inlineKeyboard(rows),
-  );
+  rows.push([
+    Markup.button.callback('✏️ Rename', cb('ws:rename', refId)),
+    Markup.button.callback('🗑️ Delete', cb('ws:delete', refId)),
+  ]);
+  rows.push([
+    Markup.button.callback('❓ Help', cb('help:settings')),
+    Markup.button.callback('🔙 Workspaces', cb('nav:ws')),
+  ]);
+
+  if (messageId > 0) {
+    await svc.notificationService.editMessage(chatId, messageId, text, Markup.inlineKeyboard(rows));
+  } else {
+    await svc.notificationService.sendRawWithKeyboard(chatId, text, Markup.inlineKeyboard(rows));
+  }
 }

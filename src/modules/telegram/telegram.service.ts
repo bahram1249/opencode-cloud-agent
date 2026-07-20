@@ -174,9 +174,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       const chatId = String(ctx.chat?.id ?? 0);
       const userId = String(ctx.from?.id ?? 0);
+      const messageId = ctx.callbackQuery && 'message' in ctx.callbackQuery && ctx.callbackQuery.message
+        ? (ctx.callbackQuery.message as { message_id?: number }).message_id ?? 0
+        : 0;
 
-      // Route all structured callbacks through the handler
-      await this.handler.handleCallback(chatId, userId, data);
+      await this.handler.handleCallback(chatId, userId, messageId, data);
       await ctx.answerCbQuery().catch(() => {});
     });
   }

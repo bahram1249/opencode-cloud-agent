@@ -67,7 +67,10 @@ export class WorkspaceService {
 
   async findById(id: string, telegramUserId?: string) {
     const tenant = telegramUserId ? await this.ensureTenant(telegramUserId) : null;
-    return this.prisma.workspace.findFirst({ where: { id, ...(tenant ? { tenantId: tenant.id } : {}) }, include: { projects: true, tenant: true } });
+    return this.prisma.workspace.findFirst({
+      where: { id, ...(tenant ? { tenantId: tenant.id } : {}) },
+      include: { projects: true, tenant: true, _count: { select: { sessions: true } } },
+    });
   }
 
   async findByName(name: string, telegramUserId?: string) {
@@ -154,7 +157,6 @@ export class WorkspaceService {
         gitPath: absPath,
         path: relPath,
         remoteUrl: dto.remoteUrl,
-        provider: dto.provider,
       },
     });
     // Auto-install dependencies after clone if enabled
@@ -183,7 +185,6 @@ export class WorkspaceService {
     if (dto.remoteUrl !== undefined) data.remoteUrl = dto.remoteUrl;
     if (dto.autoInstall !== undefined) data.autoInstall = dto.autoInstall;
     if (dto.installCommand !== undefined) data.installCommand = dto.installCommand;
-    if (dto.provider !== undefined) data.provider = dto.provider;
     if (dto.enabled !== undefined) data.enabled = dto.enabled;
     return this.prisma.workspaceProject.update({ where: { id: projectId }, data });
   }

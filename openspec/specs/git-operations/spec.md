@@ -6,11 +6,12 @@ Authenticated git operations inside workspace containers: clone, pull, push, com
 
 ### Requirement: Authenticated git clone
 
-The system SHALL clone git repositories inside the workspace container using the workspace's git credentials.
+The system SHALL clone git repositories inside the workspace container using the workspace's git credentials, which are configured through the Settings hub.
 
 #### Scenario: Clone with remote URL
 - **WHEN** a project is added with a `remoteUrl` pointing to a git repository
-- **THEN** the system runs `git clone <remoteUrl> <targetPath>` via `docker exec` inside the container, authenticated as the workspace's configured git user
+- **THEN** the system runs `git clone <remoteUrl> <targetPath>` via `docker exec` inside the container
+- **AND** authenticates using credentials configured through the Settings hub
 
 #### Scenario: Clone into workspace root
 - **WHEN** the target path is `.`
@@ -30,11 +31,11 @@ The system SHALL pull the latest changes for all enabled projects inside the con
 
 ### Requirement: Authenticated git commit and push
 
-The system SHALL allow committing and pushing changes via the container, authenticated as the workspace's git user.
+The system SHALL allow committing and pushing changes via the container, authenticated with credentials managed through the Settings hub.
 
 #### Scenario: Commit and push
 - **WHEN** user runs `/git commit` and `/git push`
-- **THEN** the system SHALL commit and push using the workspace's git credentials
+- **THEN** the system SHALL commit and push using credentials from the Settings hub
 - **AND** git SHALL authenticate via the credential helper configured with `$GIT_USERNAME` and `$GIT_TOKEN`
 
 #### Scenario: Stage and commit

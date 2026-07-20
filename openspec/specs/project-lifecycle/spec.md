@@ -22,13 +22,13 @@ Each project SHALL store a `path` field that is relative to the workspace root. 
 
 ### Requirement: Git credential check before project add with remote
 
-The system SHALL check if the workspace has git credentials configured before allowing a project add with a remote URL. If no credentials are set, the system SHALL offer to set them via `/git login`.
+The system SHALL check if the workspace has git credentials configured before allowing a project add with a remote URL. If no credentials are set, the system SHALL direct the user to configure them in the Settings hub.
 
 #### Scenario: Add project with remote URL — no credentials
 - **WHEN** user runs `/project add frontend . https://github.com/org/repo.git`
 - **AND** the workspace has no `gitToken` set
 - **THEN** the system SHALL warn the user
-- **AND** SHALL display a message with a `/git login` example
+- **AND** SHALL display a message directing the user to the Settings hub to configure git credentials
 - **AND** SHALL NOT proceed with the clone
 
 #### Scenario: Add project with remote URL — has credentials

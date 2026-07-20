@@ -32,11 +32,11 @@ When a git operation is performed inside a workspace container, the system SHALL
 Credential changes SHALL take effect on the next `docker exec` without requiring a container restart or recreation.
 
 #### Scenario: Provider key change takes effect immediately
-- **WHEN** a user updates the provider API key via `/workspace provider`
+- **WHEN** a user updates the provider API key via the Settings hub or `/workspace provider`
 - **THEN** the next session start SHALL use the new key
 - **AND** no container restart SHALL be needed
 
 #### Scenario: Git token update takes effect immediately
-- **WHEN** a user updates git credentials via `/git login`
+- **WHEN** a user updates git credentials via the Settings hub or `/git login`
 - **THEN** the next git operation SHALL use the new credentials
 - **AND** no container restart SHALL be needed

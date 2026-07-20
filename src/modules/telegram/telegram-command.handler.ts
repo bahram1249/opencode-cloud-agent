@@ -7,10 +7,10 @@ import { TelegramSessionHandler } from './handlers/telegram-session.handler';
 import { TelegramWorkspaceHandler } from './handlers/telegram-workspace.handler';
 import { TelegramProjectHandler } from './handlers/telegram-project.handler';
 import { TelegramGitHandler } from './handlers/telegram-git.handler';
-import { TelegramSetupHandler } from './handlers/telegram-setup.handler';
+
 import { parseCb } from './utils/telegram-callback.utils';
 import { showMainMenu, showGitMenu, showWorkspaceMenu, showProjectList, type MenuServices } from './ui/telegram-menus';
-import { HELP_TEXT } from './ui/telegram-help';
+import { HELP_TEXT, sendContextualHelp } from './ui/telegram-help';
 
 @Injectable()
 export class TelegramCommandHandler {
@@ -22,7 +22,6 @@ export class TelegramCommandHandler {
     private readonly workspaceHandler: TelegramWorkspaceHandler,
     private readonly projectHandler: TelegramProjectHandler,
     private readonly gitHandler: TelegramGitHandler,
-    private readonly setupHandler: TelegramSetupHandler,
   ) {}
 
   private get menuSvc(): MenuServices {
@@ -33,7 +32,7 @@ export class TelegramCommandHandler {
     };
   }
 
-  async handleCallback(chatId: string, userId: string, data: string): Promise<void> {
+  async handleCallback(chatId: string, userId: string, messageId: number, data: string): Promise<void> {
     const action = parseCb(data);
     if (!action) return;
 
@@ -44,10 +43,10 @@ export class TelegramCommandHandler {
 
     switch (namespace) {
       case 'nav':
-        await this.handleNav(chatId, userId, navTarget);
+        await this.handleNav(chatId, userId, messageId, navTarget);
         break;
       case 'ws':
-        await this.workspaceHandler.handleWSCallback(chatId, userId, action.t, value);
+        await this.workspaceHandler.handleWSCallback(chatId, userId, messageId, action.t, value);
         break;
       case 'proj':
         await this.projectHandler.handleProjCallback(chatId, userId, action.t, value);
@@ -61,30 +60,24 @@ export class TelegramCommandHandler {
       case 'key':
         await this.sessionHandler.handleKeyAction(chatId, userId, value);
         break;
-      case 'model': {
-        const selectedWsId = await this.workspaceHandler.handleModelCallback(chatId, userId, action.t, value);
-        if (selectedWsId) {
-          this.setupHandler.advanceAfterModel(chatId, userId, selectedWsId);
-        }
+      case 'help':
+        await sendContextualHelp(chatId, navTarget, this.notificationService);
         break;
-      }
+      case 'model':
+        await this.workspaceHandler.handleModelCallback(chatId, userId, messageId, action.t, value);
+        break;
       case 'branch':
         await this.projectHandler.handleBranchCallback(chatId, userId, action.t, value);
-        break;
-      case 'setup':
-        await this.setupHandler.handleSetupCallback(chatId, userId, action.t, value);
         break;
     }
   }
 
   async handleTextInput(chatId: string, userId: string, text: string): Promise<void> {
-    if (this.setupHandler.isInWizard(userId)) {
-      await this.setupHandler.handleWizardTextInput(chatId, userId, text);
-      return;
-    }
+    const handledApiKey = await this.workspaceHandler.handleApiKeyText(chatId, userId, text);
+    if (handledApiKey) return;
 
-    const handled = await this.projectHandler.handlePendingBranchSwitch(chatId, userId, text);
-    if (handled) return;
+    const handledBranch = await this.projectHandler.handlePendingBranchSwitch(chatId, userId, text);
+    if (handledBranch) return;
 
     await this.sessionHandler.handleTextInput(chatId, userId, text, false);
   }
@@ -125,8 +118,44 @@ export class TelegramCommandHandler {
     await this.sessionHandler.handleSessionsCmd(chatId, userId);
   }
 
-  async handleSetupCmd(ctx: TelegramContext, args: string[]): Promise<void> {
-    await this.setupHandler.handleSetupCmd(ctx, args);
+  async handleSetupCmd(ctx: TelegramContext, _args: string[]): Promise<void> {
+    const chatId = String(ctx.chat?.id ?? 0);
+    const userId = String(ctx.from?.id ?? 0);
+
+    let active = await this.workspaceService.getActive(userId);
+    if (!active) {
+      const all = await this.workspaceService.findAll(userId);
+      if (all.length === 0) {
+        await this.notificationService.sendRaw(chatId, 'No workspace yet. Create one first: /workspace create <name>\nThen run /setup to configure it.');
+        return;
+      }
+      active = all[0];
+      if (!active) return;
+      await this.workspaceService.setActive(active.id, userId);
+      active = await this.workspaceService.getActive(userId);
+      if (!active) return;
+    }
+    const ws = await this.workspaceService.findById(active.id, userId);
+    if (!ws) return;
+
+    const { showWorkspaceSettings } = await import('./ui/telegram-menus');
+    await this.notificationService.sendRawWithKeyboard(
+      chatId,
+      `⚙️ Opening Settings for "${ws.name}"...`,
+      undefined as never,
+    );
+    await showWorkspaceSettings(chatId, 0, {
+      id: ws.id,
+      name: ws.name,
+      workDir: ws.workDir,
+      active: ws.active,
+      providerId: ws.providerId,
+      model: ws.model,
+      projects: ws.projects,
+      gitToken: ws.gitToken,
+      gitUsername: ws.gitUsername,
+      sessionCount: ws._count?.sessions ?? 0,
+    }, this.menuSvc);
   }
 
   async handleKeyCmd(ctx: TelegramContext, key: string): Promise<void> {
@@ -140,7 +169,7 @@ export class TelegramCommandHandler {
     await this.notificationService.sendRaw(chatId, HELP_TEXT);
   }
 
-  private async handleNav(chatId: string, userId: string, target: string): Promise<void> {
+  private async handleNav(chatId: string, userId: string, messageId: number, target: string): Promise<void> {
     switch (target) {
       case 'main':
         await showMainMenu(chatId, userId, this.menuSvc);

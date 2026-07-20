@@ -4,7 +4,6 @@ import type { TelegramContext } from '../telegram.types';
 import { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
 import { NotificationService } from 'src/modules/notification/notification.service';
-import { TelegramWorkspaceHandler } from './telegram-workspace.handler';
 import { showProjectList, type MenuServices } from '../ui/telegram-menus';
 import { cb } from '../utils/telegram-callback.utils';
 
@@ -16,7 +15,6 @@ export class TelegramProjectHandler {
     private readonly notificationService: NotificationService,
     private readonly workspaceService: WorkspaceService,
     private readonly gitCommandsService: GitCommandsService,
-    private readonly workspaceHandler: TelegramWorkspaceHandler,
   ) {}
 
   private get menuSvc(): MenuServices {
@@ -133,44 +131,6 @@ export class TelegramProjectHandler {
           return;
         }
 
-        case 'provider': {
-          const parts = rest.split(' ').filter(Boolean);
-          if (parts.length < 2) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /workspace provider <provider-id> <api-key>\nExample: /workspace provider opencode sk-...');
-            return;
-          }
-          const active = await this.workspaceService.getActive(userId);
-          if (!active) {
-            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
-            return;
-          }
-          const updated = await this.workspaceService.configureProvider(active.id, userId, parts[0], parts.slice(1).join(' '));
-          await this.notificationService.sendRaw(chatId, `✅ Provider configured for "${updated.name}". Now run /workspace models ${parts[0]} to pick a default model.`);
-          break;
-        }
-        case 'models': {
-          const active = await this.workspaceService.getActive(userId);
-          if (!active) {
-            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
-            return;
-          }
-          await this.workspaceHandler.showModelPicker(chatId, userId, active.id, rest || active.providerId || undefined);
-          return;
-        }
-        case 'model': {
-          if (!rest.includes('/')) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /workspace model <provider/model-id>\nTip: run /workspace models <provider-id> and tap a model.');
-            return;
-          }
-          const active = await this.workspaceService.getActive(userId);
-          if (!active) {
-            await this.notificationService.sendRaw(chatId, 'No active workspace. Create or switch workspace first.');
-            return;
-          }
-          await this.workspaceService.setDefaultModel(active.id, userId, rest);
-          await this.notificationService.sendRaw(chatId, `✅ Default OpenCode model set to ${rest}`);
-          break;
-        }
         case 'branches':
         case 'branch': {
           const projName = rest || (projects.length === 1 ? projects[0].name : null);

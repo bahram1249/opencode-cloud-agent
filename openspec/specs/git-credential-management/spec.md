@@ -6,13 +6,17 @@ Provider-agnostic git credential management for workspace containers. Supports s
 
 ### Requirement: Provider-agnostic git credential storage
 
-The system SHALL store git credentials as `gitToken` and `gitUsername` on the `Workspace` model. These replace the GitHub-specific `githubToken` and `githubLogin` fields. Credentials SHALL be per-workspace — there is no tenant-level credential fallback.
+The system SHALL store git credentials as `gitToken` and `gitUsername` on the `Workspace` model. Credentials SHALL be configurable through the Settings hub or via the `/git login` command. Credentials SHALL be per-workspace — there is no tenant-level credential fallback.
 
-#### Scenario: Store credentials on workspace
-- **WHEN** a user sets git credentials via `/git login`
+#### Scenario: Store credentials via Settings hub
+- **WHEN** a user sets git credentials through the git management sub-screen in Settings
 - **THEN** the workspace record SHALL store `gitToken` and `gitUsername`
 - **AND** `GIT_TOKEN` and `GIT_USERNAME` SHALL be passed as `-e` env vars on subsequent `docker exec` calls for git operations
-- **AND** the container SHALL NOT have `GIT_TOKEN` or `GIT_USERNAME` in its persistent environment
+
+#### Scenario: Store credentials via /git login
+- **WHEN** user runs `/git login myuser ghp_abc123 https://github.com/org/repo.git`
+- **THEN** the system SHALL validate and store credentials via the same service method
+- **AND** the credential status SHALL be reflected in the Settings hub
 
 #### Scenario: Retrieve credentials for git operations
 - **WHEN** a git operation (clone, pull, push) is performed
@@ -22,19 +26,21 @@ The system SHALL store git credentials as `gitToken` and `gitUsername` on the `W
 
 ### Requirement: Six UX states with inline examples
 
-The system SHALL present git credential information in six distinct states, each with an icon, status description, actionable next steps, and a concrete example.
+The system SHALL present git credential information in six distinct states in both the Settings hub git management sub-screen and via `/git credential-status`, each with an icon, status description, actionable next steps, and a concrete example.
 
-#### Scenario: Empty state
+#### Scenario: Empty state in Settings
 - **WHEN** no git credentials are set on the workspace
-- **THEN** the system SHALL display: "🔑 Git Credentials — Not configured" with instructions and links to common provider token pages
+- **THEN** the git row in Settings SHALL show: "🔑 Git: Not configured"
+- **AND** tapping [Manage] SHALL show the empty state with setup instructions
 
 #### Scenario: Loading state
 - **WHEN** a credential validation is in progress
 - **THEN** the system SHALL display: "⏳ Validating git credentials..." with the remote URL being tested
 
-#### Scenario: Success state
+#### Scenario: Success state in Settings
 - **WHEN** credentials are validated and stored
-- **THEN** the system SHALL display: "✅ Git credentials verified!" with username, masked token, remote URL, and ref count
+- **THEN** the git row in Settings SHALL show: "🔑 Git: ✅ logged in as username"
+- **AND** tapping [Manage] SHALL show the full success state with masked token and actions
 
 #### Scenario: Error state
 - **WHEN** credential validation fails
@@ -59,12 +65,17 @@ The system SHALL never display the full token in any message. Only the first 4 a
 
 ### Requirement: Credential removal
 
-The system SHALL allow users to remove git credentials from a workspace.
+The system SHALL allow users to remove git credentials from a workspace via the Settings hub or `/git logout`.
 
-#### Scenario: Manual removal
-- **WHEN** user runs `/git logout`
+#### Scenario: Manual removal via Settings
+- **WHEN** user taps [Logout] in the git management sub-screen from Settings
 - **THEN** the system SHALL clear `gitToken` and `gitUsername` on the active workspace
-- **AND** SHALL display a logout confirmation with a re-login example
+- **AND** edit the message to show the empty state
+
+#### Scenario: Manual removal via /git logout
+- **WHEN** user runs `/git logout`
+- **THEN** the system SHALL clear `gitToken` and `gitUsername` via the same service method
+- **AND** the Settings hub SHALL reflect the cleared state
 
 #### Scenario: Auto-clear on git auth failure
 - **WHEN** a git push, pull, or clone returns a 401 or 403 HTTP status

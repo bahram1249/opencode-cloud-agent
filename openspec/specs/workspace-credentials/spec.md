@@ -8,15 +8,17 @@ Per-workspace credential storage and container environment injection. Each works
 
 Each workspace SHALL store its own provider API key. The `Workspace` model SHALL include an `apiKey` field. When creating or updating a workspace, the user MAY provide an API key. When a session is started, the session service SHALL read the API key from the workspace record and pass it as an environment variable on the `docker exec` command — NOT on the container itself.
 
-#### Scenario: Creating workspace with API key
-- **WHEN** user runs `/workspace create myproj --provider openai --api-key sk-abc123`
-- **THEN** the workspace record SHALL store `providerId: "openai"` and `apiKey: "sk-abc123"`
-- **AND** the container SHALL NOT have `OPENAI_API_KEY` in its environment
-- **AND** the API key SHALL be injected via `-e OPENAI_API_KEY=sk-abc123` on subsequent session `docker exec` calls
+#### Scenario: Setting API key via Settings hub
+- **WHEN** user taps [Change] next to Provider on the Settings screen
+- **AND** selects a provider from the provider picker
+- **AND** enters the API key as a text message
+- **THEN** the workspace record SHALL store `providerId` and `apiKey`
+- **AND** the container SHALL NOT have the API key in its environment
+- **AND** the API key SHALL be injected via `-e <PROVIDER_ID>_API_KEY=<key>` on subsequent session `docker exec` calls
 
-#### Scenario: Updating API key on existing workspace
-- **WHEN** user runs `/workspace provider myproj --api-key sk-xyz789`
-- **THEN** the workspace record SHALL update its `apiKey` to `"sk-xyz789"`
+#### Scenario: Updating API key
+- **WHEN** user changes the provider API key via the Settings hub or `/workspace provider`
+- **THEN** the workspace record SHALL update its `apiKey`
 - **AND** the next session SHALL receive the new key via `docker exec -e`
 - **AND** no container restart SHALL occur
 
@@ -41,9 +43,16 @@ Each workspace SHALL store its own `gitToken` and `gitUsername`. The `Workspace`
 
 ### Requirement: Interactive git credential setup per workspace
 
-The system SHALL support setting git credentials via a personal access token and username, scoped to a specific workspace. Validation SHALL use `git ls-remote` against the first project's remote URL or a user-provided URL.
+The system SHALL support setting git credentials via the Settings hub or the `/git login` command, scoped to a specific workspace. Validation SHALL use `git ls-remote` against the first project's remote URL or a user-provided URL.
 
-#### Scenario: Set credentials via command
+#### Scenario: Set credentials via Settings hub
+- **WHEN** user opens the git management sub-screen from Settings
+- **AND** enters username and token
+- **THEN** the system SHALL validate via `git ls-remote`
+- **AND** store `gitToken` and `gitUsername` on the active workspace
+- **AND** edit the message back to Settings with updated status
+
+#### Scenario: Set credentials via /git login
 - **WHEN** user runs `/git login myuser ghp_abc123 https://gitlab.com/group/repo.git`
 - **THEN** the system SHALL validate via `git ls-remote`
 - **AND** store `gitToken` and `gitUsername` on the active workspace
@@ -53,27 +62,6 @@ The system SHALL support setting git credentials via a personal access token and
 - **WHEN** `git ls-remote` fails against the provided URL
 - **THEN** the system SHALL NOT store the credentials
 - **AND** SHALL send an error notification with possible causes and a corrected example
-
-### Requirement: Interactive setup wizard
-
-The bot SHALL provide a `/setup` command that guides the user through workspace configuration step by step. The wizard SHALL:
-1. Prompt the user to select an AI provider from a list (OpenCode Zen/Go, OpenAI, Anthropic, GitHub Copilot)
-2. Accept the provider API key via text message
-3. Wait for the container to start, then list available models for the selected provider
-4. Let the user pick a default model
-5. Optionally offer git login
-
-#### Scenario: Setup wizard full flow
-- **WHEN** user runs `/setup`
-- **THEN** the bot SHALL show provider selection inline buttons
-- **WHEN** user selects a provider
-- **THEN** the bot SHALL ask for the API key
-- **WHEN** user sends the API key
-- **THEN** the bot SHALL configure the provider and show the model picker
-- **WHEN** user selects a model
-- **THEN** the bot SHALL offer git credential entry or skip
-- **WHEN** user completes all steps
-- **THEN** the bot SHALL confirm setup is complete
 
 ### Requirement: Credential revocation
 

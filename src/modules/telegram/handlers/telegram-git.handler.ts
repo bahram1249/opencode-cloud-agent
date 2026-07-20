@@ -266,8 +266,7 @@ export class TelegramGitHandler {
         `✅ Git credentials stored for *${result.username}*\nToken: ${result.tokenMasked}\n\n` +
         'No remote URL provided — validation skipped. Add a project with a remote URL to verify:\n' +
         '  /project add <name> <path> <remote-url>\n\n' +
-        'Example:\n' +
-        '  /project add frontend . https://github.com/myorg/project.git',
+        'You can also manage git credentials in Workspace Settings → Manage Git.',
       );
       return;
     }
@@ -293,8 +292,7 @@ export class TelegramGitHandler {
         `  Token:     ${stored.tokenMasked}\n` +
         `  Remote:    ${validationUrl}\n` +
         `  Test:      ✔ git ls-remote succeeded (${result.refCount} refs found)\n\n` +
-        `Try: /git status\n` +
-        `Try: /git pull`,
+        `Manage in Workspace Settings → Manage Git.`,
       );
     } else {
       const hints: Record<string, string> = {
@@ -330,9 +328,8 @@ export class TelegramGitHandler {
       `✅ Git credentials removed\n\n` +
       `  Workspace "${status.workspaceName}" no longer has git authentication.\n\n` +
       `To set up new credentials:\n` +
-      `  /git login <username> <token> <remote-url>\n\n` +
-      `Example:\n` +
-      `  /git login ${status.username} <new-token> https://github.com/myorg/project.git`,
+      `  /git login <username> <token> <remote-url>\n` +
+      `  Or use Workspace Settings → Manage Git.`,
     );
   }
 
