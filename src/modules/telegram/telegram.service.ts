@@ -2,7 +2,6 @@ import { Injectable, Logger, type OnModuleInit, type OnModuleDestroy } from '@ne
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramCommandHandler } from './telegram-command.handler';
 import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
-import { NotificationService } from 'src/modules/notification/notification.service';
 import type { Update } from 'telegraf/types';
 import type { Context } from 'telegraf';
 
@@ -14,7 +13,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly botService: TelegramBotService,
     private readonly handler: TelegramCommandHandler,
     private readonly guard: TelegramAuthGuard,
-    private readonly notificationService: NotificationService,
   ) {}
 
   onModuleInit(): void {
