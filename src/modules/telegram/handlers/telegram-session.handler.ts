@@ -174,12 +174,32 @@ export class TelegramSessionHandler {
           if (ok) {
             const session = this.sessionService.getActiveSession(value);
             if (session) {
+              await this.streamService.createStreamView(chatId, session.publicId, () => {
+                const buf = session.terminal.buffer.active;
+                const rows = session.terminal.rows;
+                const start = buf.viewportY;
+                const lines: string[] = [];
+                for (let y = start; y < start + rows; y++) {
+                  const line = buf.getLine(y);
+                  if (line) lines.push(line.translateToString().trimEnd());
+                }
+                return lines.filter(l => l.length > 0).join('\n');
+              });
               await this.notificationService.sendRaw(chatId, `👉 Switched to session ${session.publicId}`);
               await showSessionContext(chatId, userId, session, this.menuSvc);
             }
           } else {
             await this.notificationService.sendRaw(chatId, 'Session not found.');
           }
+        }
+        break;
+      }
+      case 'sess:refresh': {
+        const colonIdx = value.indexOf(':');
+        if (colonIdx > 0) {
+          const publicId = value.slice(0, colonIdx);
+          const streamId = value.slice(colonIdx + 1);
+          await this.streamService.refreshEntry(publicId, streamId);
         }
         break;
       }
