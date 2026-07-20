@@ -3,6 +3,11 @@ import { TelegramBotService } from './telegram-bot.service';
 import { TelegramService } from './telegram.service';
 import { TelegramController } from './telegram.controller';
 import { TelegramCommandHandler } from './telegram-command.handler';
+import { TelegramSessionHandler } from './handlers/telegram-session.handler';
+import { TelegramWorkspaceHandler } from './handlers/telegram-workspace.handler';
+import { TelegramProjectHandler } from './handlers/telegram-project.handler';
+import { TelegramGitHandler } from './handlers/telegram-git.handler';
+import { TelegramSetupHandler } from './handlers/telegram-setup.handler';
 import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
 import { NotificationModule } from '../notification/notification.module';
 import { WorkspaceModule } from '../workspace/workspace.module';
@@ -16,7 +21,10 @@ import { GitAuthModule } from '../git-auth/git-auth.module';
     NotificationModule, WorkspaceModule, SessionModule, StreamModule, GitCommandsModule, GitAuthModule,
   ],
   controllers: [TelegramController],
-  providers: [TelegramBotService, TelegramService, TelegramCommandHandler, TelegramAuthGuard],
+  providers: [
+    TelegramBotService, TelegramService, TelegramCommandHandler, TelegramAuthGuard,
+    TelegramSessionHandler, TelegramWorkspaceHandler, TelegramProjectHandler, TelegramGitHandler, TelegramSetupHandler,
+  ],
   exports: [TelegramService, TelegramBotService],
 })
 export class TelegramModule {}
