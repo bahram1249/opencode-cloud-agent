@@ -21,7 +21,8 @@ The system SHALL create a dedicated Docker container for every workspace. The co
 
 #### Scenario: Auto-assign host path
 - **WHEN** a workspace is created without an explicit host path
-- **THEN** the system assigns `{workspaceRoot}/{tenantId}/{workspaceName}` as the host path (sanitized) and creates the directory
+- **THEN** the system assigns `{workspaceRoot}/{tenantId}/{workspaceId}` as the host path where `workspaceId` is a pre-generated UUID
+- **AND** the system creates the directory
 
 #### Scenario: Start stopped container
 - **WHEN** `ensureContainer()` is called for a workspace with an existing but stopped container
