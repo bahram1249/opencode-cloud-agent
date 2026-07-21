@@ -81,7 +81,9 @@ export class EnvironmentVariables {
   @IsOptional()
   WORKSPACE_CONTAINERS_ENABLED?: string;
 
-
+  @IsString()
+  @IsOptional()
+  MINI_APP_URL?: string;
 }
 
 /**

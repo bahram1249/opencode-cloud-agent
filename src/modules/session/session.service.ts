@@ -514,6 +514,13 @@ export class SessionService {
     return this.sessions.get(sessionId);
   }
 
+  findByPublicId(publicId: string): ActiveSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.publicId === publicId) return session;
+    }
+    return undefined;
+  }
+
   getUserSession(telegramUserId: string): ActiveSession | undefined {
     const sessionId = this.userSessions.get(telegramUserId);
     if (!sessionId) return undefined;

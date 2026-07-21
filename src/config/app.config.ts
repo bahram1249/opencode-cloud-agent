@@ -64,6 +64,7 @@ export interface AppConfig {
   workspaceImage: string;
   dockerSocket: string;
   workspaceContainersEnabled: boolean;
+  miniAppUrl: string;
 }
 
 export const APP_CONFIG = 'APP_CONFIG';
@@ -87,5 +88,6 @@ export const appConfig = registerAs('app', (): AppConfig => {
     workspaceImage: process.env['WORKSPACE_IMAGE'] ?? 'opencode-cloud-agent/workspace:latest',
     dockerSocket: process.env['DOCKER_SOCKET'] ?? '/var/run/docker.sock',
     workspaceContainersEnabled: process.env['WORKSPACE_CONTAINERS_ENABLED'] !== 'false',
+    miniAppUrl: process.env['MINI_APP_URL'] ?? (process.env['WEBHOOK_DOMAIN'] ? `${process.env['WEBHOOK_DOMAIN']}/mini-app` : `http://localhost:${process.env['PORT'] ?? 3000}/mini-app`),
   };
 });

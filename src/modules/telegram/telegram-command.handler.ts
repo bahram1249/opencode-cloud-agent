@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { TelegramContext } from './telegram.types';
 import { NotificationService } from 'src/modules/notification/notification.service';
 import { WorkspaceService } from 'src/modules/workspace/workspace.service';
@@ -22,6 +23,7 @@ export class TelegramCommandHandler {
     private readonly workspaceHandler: TelegramWorkspaceHandler,
     private readonly projectHandler: TelegramProjectHandler,
     private readonly gitHandler: TelegramGitHandler,
+    private readonly configService: ConfigService,
   ) {}
 
   private get menuSvc(): MenuServices {
@@ -29,6 +31,7 @@ export class TelegramCommandHandler {
       notificationService: this.notificationService,
       workspaceService: this.workspaceService,
       sessionService: this.sessionService,
+      miniAppUrl: this.configService.get<string>('app.miniAppUrl', ''),
     };
   }
 

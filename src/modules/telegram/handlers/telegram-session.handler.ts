@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { TelegramContext } from '../telegram.types';
 import { NotificationService } from 'src/modules/notification/notification.service';
 import { WorkspaceService } from 'src/modules/workspace/workspace.service';
@@ -17,6 +18,7 @@ export class TelegramSessionHandler {
     private readonly workspaceService: WorkspaceService,
     private readonly sessionService: SessionService,
     private readonly streamService: StreamService,
+    private readonly configService: ConfigService,
   ) {}
 
   private get menuSvc(): MenuServices {
@@ -24,6 +26,8 @@ export class TelegramSessionHandler {
       notificationService: this.notificationService,
       workspaceService: this.workspaceService,
       sessionService: this.sessionService,
+      miniAppUrl: this.configService.get<string>('app.miniAppUrl', ''),
+      botToken: this.configService.get<string>('app.botToken', ''),
     };
   }
 
@@ -241,7 +245,7 @@ export class TelegramSessionHandler {
           }
         }
         return lines.filter(l => l.length > 0).join('\n');
-      });
+      }, userId);
 
       session.emitter.on('output', (text: string) => {
         this.streamService.appendOutput(session.publicId, text);

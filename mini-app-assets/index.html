@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>OpenCode Orchestrator</title>
+  <link rel="stylesheet" href="/mini-app/assets/xterm.css">
+  <link rel="stylesheet" href="/mini-app/assets/styles.css">
+</head>
+<body>
+  <nav id="navbar">
+    <a href="#dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
+    <a href="#workspaces" class="nav-link" data-route="workspaces">Workspaces</a>
+    <a href="#sessions" class="nav-link" data-route="sessions">Sessions</a>
+    <span class="nav-user" id="navUser"></span>
+  </nav>
+  <main id="app">
+    <div class="loading">Loading...</div>
+  </main>
+  <script src="/mini-app/assets/xterm.js"></script>
+  <script src="/mini-app/assets/socket.io.js"></script>
+  <script src="/mini-app/assets/app.js?v=7"></script>
+</body>
+</html>

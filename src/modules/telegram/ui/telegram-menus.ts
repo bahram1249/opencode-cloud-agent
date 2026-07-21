@@ -3,6 +3,7 @@ import type { NotificationService } from 'src/modules/notification/notification.
 import type { WorkspaceService } from 'src/modules/workspace/workspace.service';
 import type { SessionService, ActiveSession } from 'src/modules/session/session.service';
 import { cb } from '../utils/telegram-callback.utils';
+import { generateAuthToken } from 'src/common/utils/auth-token';
 
 const PROVIDER_ICONS: Record<string, string> = {
   opencode: '🔵',
@@ -24,6 +25,8 @@ export interface MenuServices {
   workspaceService: WorkspaceService;
   sessionService: SessionService;
   refWs?: (wsId: string) => string;
+  miniAppUrl?: string;
+  botToken?: string;
 }
 
 export async function showMainMenu(chatId: string, userId: string, svc: MenuServices): Promise<void> {
@@ -146,12 +149,22 @@ export async function showSessionContext(
     Markup.button.callback(`📁 ${p.name}`, cb('proj:select', p.id)),
   );
 
-  const keyboard = Markup.inlineKeyboard([
+  const rows: Array<Array<ReturnType<typeof Markup.button.callback | typeof Markup.button.webApp>>> = [
     [Markup.button.callback('✋ Cancel Session', cb('sess:cancel'))],
     [Markup.button.callback('📊 Git Status', cb('nav:git')), Markup.button.callback('📁 Projects', cb('nav:projects'))],
     [Markup.button.callback('📋 Workspace', cb('nav:ws'))],
-    ...(projButtons.length > 0 ? [projButtons] : []),
-  ]);
+    ...(projButtons.length > 0 ? [projButtons.map((b) => b as ReturnType<typeof Markup.button.callback | typeof Markup.button.webApp>)] : []),
+  ];
+
+  if (svc.miniAppUrl) {
+    const token = svc.botToken ? generateAuthToken(svc.botToken, userId) : '';
+    const miniAppUrl = token
+      ? `${svc.miniAppUrl}?session=${session.publicId}&token=${token}`
+      : `${svc.miniAppUrl}?session=${session.publicId}`;
+    rows.push([Markup.button.webApp('🚀 Open in Mini App', miniAppUrl)]);
+  }
+
+  const keyboard = Markup.inlineKeyboard(rows as never);
 
   await svc.notificationService.sendRawWithKeyboard(
     chatId,

@@ -52,3 +52,13 @@ The Telegram callback `sess:refresh` SHALL accept a stream entry identifier to t
 - **AND** the user presses `[🔄 Refresh]` on one specific message
 - **THEN** only that specific message SHALL be refreshed
 - **AND** other stream entries for the same session SHALL NOT be affected
+
+### Requirement: Mini App terminal is real-time
+
+The Mini App terminal (xterm.js + WebSocket) SHALL receive PTY output in real time and does not require a manual refresh mechanism. The `[🔄 Refresh]` button is specific to the Telegram message-based streaming and SHALL NOT be replicated in the Mini App.
+
+#### Scenario: Mini App does not need refresh
+- **WHEN** a user views a session terminal in the Mini App
+- **THEN** output SHALL stream in real time via WebSocket
+- **AND** no manual refresh button or gesture SHALL be needed
+- **AND** the existing `[🔄 Refresh]` button on Telegram messages SHALL continue to work as specified

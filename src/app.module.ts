@@ -17,6 +17,9 @@ import { SessionModule } from './modules/session/session.module';
 import { StreamModule } from './modules/stream/stream.module';
 import { GitCommandsModule } from './modules/git-commands/git-commands.module';
 import { GitAuthModule } from './modules/git-auth/git-auth.module';
+import { ApiModule } from './modules/api/api.module';
+import { MiniAppModule } from './modules/mini-app/mini-app.module';
+import { GatewayModule } from './modules/gateway/gateway.module';
 
 @Module({
   imports: [
@@ -46,6 +49,11 @@ import { GitAuthModule } from './modules/git-auth/git-auth.module';
     StreamModule,
     GitCommandsModule,
     GitAuthModule,
+
+    // ── Mini App ───────────────────────────────────────────────────
+    ApiModule,
+    MiniAppModule,
+    GatewayModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },

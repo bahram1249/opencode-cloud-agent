@@ -4,6 +4,9 @@ import { ValidationPipe, Logger as NestLogger } from '@nestjs/common';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
+import { IoAdapter } from '@nestjs/platform-socket.io';
+import { join } from 'node:path';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 
 /**
@@ -11,14 +14,20 @@ import { AppModule } from './app.module';
  *  - Pino logger (via nestjs-pino)
  *  - Global ValidationPipe (whitelist, transform, forbidNonWhitelisted)
  *  - Swagger /api/docs
+ *  - WebSocket adapter (Socket.IO)
  *  - Graceful shutdown hooks
  */
 async function bootstrap(): Promise<void> {
   // Use the default Nest logger during boot so errors are visible immediately,
   // then switch to Pino once the DI container is ready.
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: false,
-    cors: true,
+    cors: {
+      origin: true,
+      credentials: true,
+      exposedHeaders: ['X-Telegram-Init-Data'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Telegram-Init-Data'],
+    },
   });
 
   // Switch to Pino logger now that the container is initialised
@@ -28,7 +37,16 @@ async function bootstrap(): Promise<void> {
   const port = config.get<number>('app.port', 3000);
   const logger = new NestLogger('Bootstrap');
 
-  app.setGlobalPrefix('api');
+  // WebSocket adapter for SessionGateway
+  app.useWebSocketAdapter(new IoAdapter(app));
+
+  // API prefix excludes Mini App routes (handled separately)
+  app.setGlobalPrefix('api', { exclude: ['mini-app', 'mini-app/(.*)'] });
+
+  // Serve Mini App static assets
+  app.useStaticAssets(join(__dirname, '..', '..', 'mini-app-assets'), {
+    prefix: '/mini-app/assets',
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

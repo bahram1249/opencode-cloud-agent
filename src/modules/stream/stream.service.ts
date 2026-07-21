@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Telegraf, Markup } from 'telegraf';
 import { ConfigService } from '@nestjs/config';
+import type { AppConfig } from 'src/config/app.config';
 import { cb } from '../telegram/utils/telegram-callback.utils';
+import { generateAuthToken } from 'src/common/utils/auth-token';
 
 type StreamEntryStatus = 'live' | 'frozen' | 'finished';
 
@@ -11,6 +13,7 @@ interface StreamEntry {
   readOutput: () => string;
   lastFlush: number;
   status: StreamEntryStatus;
+  createdBy?: string;
 }
 
 @Injectable()
@@ -23,27 +26,52 @@ export class StreamService {
   private readonly MIN_ENTRY_INTERVAL_MS = 500;
   private streamIdCounter = 0;
 
-  constructor(private readonly config: ConfigService) {
-    const token = this.config.get<string>('app.botToken', '');
-    this.bot = token ? new Telegraf(token) : null;
+  private readonly miniAppUrl: string;
+  private readonly botToken: string;
+
+  constructor(config: ConfigService) {
+    const appConfig = config.get<AppConfig>('app');
+    this.botToken = appConfig?.botToken ?? '';
+    this.bot = this.botToken ? new Telegraf(this.botToken) : null;
+    this.miniAppUrl = appConfig?.miniAppUrl ?? '';
   }
 
   private generateStreamId(): string {
     return `v-${++this.streamIdCounter}`;
   }
 
+  private miniAppUrlWithToken(publicId: string): string | null {
+    if (!this.miniAppUrl || !this.botToken) return null;
+    const entries = this.sessions.get(publicId);
+    if (!entries) return `${this.miniAppUrl}?session=${publicId}`;
+    const userId = [...entries.values()].find((e) => e.createdBy)?.createdBy;
+    if (!userId) return `${this.miniAppUrl}?session=${publicId}`;
+    const token = generateAuthToken(this.botToken, userId);
+    return `${this.miniAppUrl}?session=${publicId}&token=${token}`;
+  }
+
   private liveKeyboard(streamId: string, publicId: string) {
-    return Markup.inlineKeyboard([
+    const rows: Array<ReturnType<typeof Markup.button.callback | typeof Markup.button.webApp>[]> = [
       [Markup.button.callback('↹ Tab', cb('key', 'tab')), Markup.button.callback('↵ Enter', cb('key', 'enter'))],
       [Markup.button.callback('⬆ Up', cb('key', 'up')), Markup.button.callback('⬇ Down', cb('key', 'down'))],
       [Markup.button.callback('🔄 Refresh', cb('sess:refresh', `${publicId}:${streamId}`)), Markup.button.callback('✕ Ctrl+C', cb('key', 'ctrl+c'))],
-    ]).reply_markup;
+    ];
+    const miniAppUrl = this.miniAppUrlWithToken(publicId);
+    if (miniAppUrl) {
+      rows.push([Markup.button.webApp('🚀 Open in Mini App', miniAppUrl)]);
+    }
+    return Markup.inlineKeyboard(rows).reply_markup;
   }
 
   private finishedKeyboard(streamId: string, publicId: string) {
-    return Markup.inlineKeyboard([
+    const rows: Array<ReturnType<typeof Markup.button.callback | typeof Markup.button.webApp>[]> = [
       [Markup.button.callback('🔄 Refresh', cb('sess:refresh', `${publicId}:${streamId}`))],
-    ]).reply_markup;
+    ];
+    const miniAppUrl = this.miniAppUrlWithToken(publicId);
+    if (miniAppUrl) {
+      rows.push([Markup.button.webApp('🚀 Open in Mini App', miniAppUrl)]);
+    }
+    return Markup.inlineKeyboard(rows).reply_markup;
   }
 
   private formatOutput(raw: string): string {
@@ -69,18 +97,13 @@ export class StreamService {
     chatId: string,
     sessionPublicId: string,
     readOutput: () => string,
+    createdBy?: string,
   ): Promise<{ messageId: number | null; streamId: string }> {
     if (!this.bot) return { messageId: null, streamId: '' };
 
     const streamId = this.generateStreamId();
 
     try {
-      const msg = await this.bot.telegram.sendMessage(
-        chatId,
-        `<b>Session ${this.esc(sessionPublicId)}</b>\n<code>Starting...</code>`,
-        { parse_mode: 'HTML', reply_markup: this.liveKeyboard(streamId, sessionPublicId) },
-      );
-
       let entryMap = this.sessions.get(sessionPublicId);
       if (!entryMap) {
         entryMap = new Map();
@@ -89,11 +112,20 @@ export class StreamService {
 
       entryMap.set(streamId, {
         chatId,
-        messageId: msg.message_id,
+        messageId: 0,
         readOutput,
         lastFlush: Date.now(),
         status: 'live',
+        createdBy,
       });
+
+      const msg = await this.bot.telegram.sendMessage(
+        chatId,
+        `<b>Session ${this.esc(sessionPublicId)}</b>\n<code>Starting...</code>`,
+        { parse_mode: 'HTML', reply_markup: this.liveKeyboard(streamId, sessionPublicId) },
+      );
+
+      entryMap.set(streamId, { ...entryMap.get(streamId)!, messageId: msg.message_id });
 
       return { messageId: msg.message_id, streamId };
     } catch (err) {
