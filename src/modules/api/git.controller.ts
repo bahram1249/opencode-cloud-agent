@@ -35,15 +35,15 @@ export class GitController {
   @Get(':workspaceId/status')
   @ApiOperation({ summary: 'Show git status' })
   async status(@Param('workspaceId') workspaceId: string, @Query('projectId') projectId?: string) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, projectId);
-    return { project: name, ...await this.gitCommandsService.status(gitPath) };
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, projectId);
+    return { project: name, ...await this.gitCommandsService.status(gitPath, containerId) };
   }
 
   @Get(':workspaceId/diff')
   @ApiOperation({ summary: 'Show git diff (unlimited length)' })
   async diff(@Param('workspaceId') workspaceId: string, @Query('projectId') projectId?: string) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, projectId);
-    const d = await this.gitCommandsService.diff(gitPath);
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, projectId);
+    const d = await this.gitCommandsService.diff(gitPath, undefined, containerId);
     return { project: name, diff: d };
   }
 
@@ -53,9 +53,9 @@ export class GitController {
     @Param('workspaceId') workspaceId: string,
     @Body() body: { message: string; projectId?: string },
   ) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, body.projectId);
-    await this.gitCommandsService.add(gitPath);
-    const result = await this.gitCommandsService.commit(gitPath, body.message);
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, body.projectId);
+    await this.gitCommandsService.add(gitPath, undefined, containerId);
+    const result = await this.gitCommandsService.commit(gitPath, body.message, containerId);
     return { project: name, sha: result.sha };
   }
 
@@ -92,16 +92,16 @@ export class GitController {
     @Query('projectId') projectId?: string,
     @Query('limit') limit = 10,
   ) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, projectId);
-    const result = await this.gitCommandsService.log(gitPath, limit);
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, projectId);
+    const result = await this.gitCommandsService.log(gitPath, limit, containerId);
     return { project: name, ...result };
   }
 
   @Get(':workspaceId/branches')
   @ApiOperation({ summary: 'List branches' })
   async branches(@Param('workspaceId') workspaceId: string, @Query('projectId') projectId?: string) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, projectId);
-    return { project: name, ...await this.gitCommandsService.branch(gitPath) };
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, projectId);
+    return { project: name, ...await this.gitCommandsService.branch(gitPath, containerId) };
   }
 
   @Post(':workspaceId/checkout')
@@ -110,17 +110,17 @@ export class GitController {
     @Param('workspaceId') workspaceId: string,
     @Body() body: { branch: string; projectId?: string; onDirty?: 'stash' | 'abort' },
   ) {
-    const { gitPath, name } = await this.resolveProjectPath(workspaceId, body.projectId);
-    const status = await this.gitCommandsService.status(gitPath);
+    const { gitPath, name, containerId } = await this.resolveProjectPath(workspaceId, body.projectId);
+    const status = await this.gitCommandsService.status(gitPath, containerId);
 
     if (status.clean) {
-      await this.gitCommandsService.checkout(gitPath, body.branch);
+      await this.gitCommandsService.checkout(gitPath, body.branch, containerId);
       return { project: name, branch: body.branch, action: 'checkout' };
     }
 
     if (body.onDirty === 'stash') {
-      await this.gitCommandsService.stash(gitPath, `auto-stash before ${body.branch}`);
-      await this.gitCommandsService.checkout(gitPath, body.branch);
+      await this.gitCommandsService.stash(gitPath, `auto-stash before ${body.branch}`, containerId);
+      await this.gitCommandsService.checkout(gitPath, body.branch, containerId);
       return { project: name, branch: body.branch, action: 'stash_and_checkout' };
     }
 
@@ -137,7 +137,12 @@ export class GitController {
     if (!ws?.containerId) throw new BadRequestException('No container running for this workspace');
     const { gitPath, name } = await this.resolveProjectPath(workspaceId, body.projectId);
     const containerCwd = this.workspaceService.resolveContainerPath(gitPath, ws.workDir, ws.containerId);
-    const output = await this.gitCommandsService.exec(ws.containerId, containerCwd, 'gh', ['pr', 'create', '--fill']);
+    const creds = await this.workspaceService.getWorkspaceCredentials(workspaceId);
+    const ghEnv: Record<string, string> = {};
+    if (creds.gitToken) {
+      ghEnv.GH_TOKEN = creds.gitToken;
+    }
+    const output = await this.gitCommandsService.exec(ws.containerId, containerCwd, 'gh', ['pr', 'create', '--fill'], ghEnv);
     const url = output.trim().split('\n').pop() || output.trim();
     return { project: name, url };
   }

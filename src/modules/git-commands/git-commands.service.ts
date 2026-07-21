@@ -144,7 +144,7 @@ export class GitCommandsService {
       if (containerId) {
         if (credentials) {
           const wrapped = this.buildGitShCommand(args, credentials);
-          const env = { GIT_USERNAME: credentials.username, GIT_TOKEN: credentials.token };
+          const env = { GIT_USERNAME: credentials.username, GIT_TOKEN: credentials.token, GIT_TERMINAL_PROMPT: '0' };
           return await this.execInContainer(containerId, cwd, wrapped.command, wrapped.args, env);
         }
         return await this.execInContainer(containerId, cwd, 'git', args);
@@ -169,7 +169,7 @@ export class GitCommandsService {
   }
 
   /** Run an arbitrary command inside a container, returning stdout. */
-  async exec(containerId: string, cwd: string, command: string, args: string[]): Promise<string> {
-    return this.execInContainer(containerId, cwd, command, args);
+  async exec(containerId: string, cwd: string, command: string, args: string[], env?: Record<string, string>): Promise<string> {
+    return this.execInContainer(containerId, cwd, command, args, env);
   }
 }

@@ -55,7 +55,7 @@ export const HELP_TEXT = [
   '/workspace sync <name> — Sync git projects',
   '',
   '*Project*',
-  '/project add <name> <path> [url] — Add git project',
+  '/project add <name> [path] [url] — Add git project (path defaults to . for workspace root)',
   '/project list — List projects',
   '/project edit <name> (name:|path:) — Edit project',
   '/project delete <name> — Delete project',

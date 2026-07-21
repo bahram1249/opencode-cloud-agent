@@ -53,21 +53,22 @@ export class TelegramProjectHandler {
           if (!rest) {
             await this.notificationService.sendRaw(
               chatId,
-              'Usage: /project add <name> <path> [remote-url]\n' +
+              'Usage: /project add <name> [path] [remote-url]\n' +
               '  name        — Display name for the project\n' +
-              '  path        — Relative path inside workspace (. for root, frontend for /workspace/frontend)\n' +
-              '  remote-url  — GitHub .git URL (optional, requires GitHub login first)',
+              '  path        — Relative path inside workspace (. for root, frontend for /workspace/frontend, default: .)\n' +
+              '  remote-url  — GitHub .git URL (optional, requires git login first)',
             );
             return;
           }
           const parts = rest.split(' ').filter(Boolean);
-          if (parts.length < 2) {
-            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> <path> [remote-url]\nExample: /project add frontend frontend https://github.com/org/repo.git');
+          if (parts.length < 1) {
+            await this.notificationService.sendRaw(chatId, 'Usage: /project add <name> [path] [remote-url]\nExamples:\n/project add frontend frontend https://github.com/org/repo.git\n/project add myapp . https://github.com/org/repo.git\n/project add myapp https://github.com/org/repo.git');
             return;
           }
           const projName = parts[0];
-          const projPath = parts[1];
-          const remoteUrl = parts.length > 2 ? parts.slice(2).join('') : undefined;
+          const isUrl = (s: string) => s.includes('://') || s.includes('@') || s.endsWith('.git') || s.startsWith('git@');
+          const projPath = parts.length >= 2 && !isUrl(parts[1]) ? parts[1] : '.';
+          const remoteUrl = parts.length >= 2 && !isUrl(parts[1]) ? (parts.slice(2).join('') || undefined) : (parts.slice(1).join('') || undefined);
 
           if (remoteUrl) {
             const creds = await this.workspaceService.getWorkspaceCredentials(active.id);

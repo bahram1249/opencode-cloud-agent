@@ -67,7 +67,7 @@ export async function showGitMenu(chatId: string, userId: string, svc: MenuServi
 
   const projects = await svc.workspaceService.getProjects(active.id);
   if (projects.length === 0) {
-    await svc.notificationService.sendRaw(chatId, 'No git projects in this workspace. Add: /project add <name> <path> [remote-url]');
+    await svc.notificationService.sendRaw(chatId, 'No git projects in this workspace. Add: /project add <name> [path] [remote-url]');
     return;
   }
 
@@ -116,7 +116,7 @@ export async function showProjectList(chatId: string, userId: string, svc: MenuS
 
   const projects = await svc.workspaceService.getProjects(active.id);
   if (projects.length === 0) {
-    await svc.notificationService.sendRaw(chatId, `No projects in "${active.name}".\nAdd: /project add <name> <path> [remote-url]\nExample: /project add frontend . https://github.com/org/repo.git`);
+    await svc.notificationService.sendRaw(chatId, `No projects in "${active.name}".\nAdd: /project add <name> [path] [remote-url]\nExamples:\n/project add frontend frontend https://github.com/org/repo.git\n/project add myapp . https://github.com/org/repo.git\n/project add myapp https://github.com/org/repo.git`);
     return;
   }
 

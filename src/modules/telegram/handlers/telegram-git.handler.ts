@@ -88,7 +88,7 @@ export class TelegramGitHandler {
     try {
       switch (sub) {
         case 'status': {
-          const s = await this.gitCommandsService.status(gitPath);
+          const s = await this.gitCommandsService.status(gitPath, active.containerId ?? undefined);
           const files = s.files.slice(0, 20).map((f) => `  ${f}`).join('\n');
           await this.notificationService.sendRaw(
             chatId,
@@ -97,7 +97,7 @@ export class TelegramGitHandler {
           break;
         }
         case 'diff': {
-          const d = await this.gitCommandsService.diff(gitPath);
+          const d = await this.gitCommandsService.diff(gitPath, undefined, active.containerId ?? undefined);
           if (!d.trim()) {
             await this.notificationService.sendRaw(chatId, `No unstaged changes (${projName}).`);
             return;
@@ -107,7 +107,7 @@ export class TelegramGitHandler {
           break;
         }
         case 'add': {
-          await this.gitCommandsService.add(gitPath);
+          await this.gitCommandsService.add(gitPath, undefined, active.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Staged all changes (${projName})`);
           break;
         }
@@ -116,7 +116,7 @@ export class TelegramGitHandler {
             await this.notificationService.sendRaw(chatId, 'Usage: /git commit <message>');
             return;
           }
-          const r = await this.gitCommandsService.commit(gitPath, rest);
+          const r = await this.gitCommandsService.commit(gitPath, rest, active.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Committed (${projName}): ${r.sha.slice(0, 7)}`);
           break;
         }
@@ -135,7 +135,7 @@ export class TelegramGitHandler {
           break;
         }
         case 'log': {
-          const r = await this.gitCommandsService.log(gitPath, 5);
+          const r = await this.gitCommandsService.log(gitPath, 5, active.containerId ?? undefined);
           const lines = r.commits.map((c) => `${c.sha.slice(0, 7)} ${c.message} (${c.author})`);
           await this.notificationService.sendRaw(chatId, `📋 Log (${projName}):\n${lines.join('\n')}`);
           break;
@@ -152,7 +152,11 @@ export class TelegramGitHandler {
           }
           try {
             const containerCwd = gitPath ? this.workspaceService.resolveContainerPath(gitPath, active.workDir, active.containerId) : '/workspace';
-            const output = await this.gitCommandsService.exec(active.containerId, containerCwd, 'gh', ['pr', 'create', '--fill']);
+            const ghEnv: Record<string, string> = {};
+            if (creds.gitToken) {
+              ghEnv.GH_TOKEN = creds.gitToken;
+            }
+            const output = await this.gitCommandsService.exec(active.containerId, containerCwd, 'gh', ['pr', 'create', '--fill'], ghEnv);
             const url = output.trim().split('\n').pop() || output.trim();
             await this.notificationService.sendRaw(chatId, `✅ PR created (${projName}): ${url}`);
           } catch (err) {
@@ -194,13 +198,15 @@ export class TelegramGitHandler {
     try {
       switch (type) {
         case 'git:diff': {
-          const d = await this.gitCommandsService.diff(project.gitPath);
+          const diffWs = await this.workspaceService.findById(project.workspaceId);
+          const d = await this.gitCommandsService.diff(project.gitPath, undefined, diffWs?.containerId ?? undefined);
           const clipped = d.length > 3500 ? d.slice(0, 3500) + '...' : d;
           await this.notificationService.sendRaw(chatId, `📝 Diff (${project.name}):\n${clipped || 'No changes'}`);
           break;
         }
         case 'git:add': {
-          await this.gitCommandsService.add(project.gitPath);
+          const addWs = await this.workspaceService.findById(project.workspaceId);
+          await this.gitCommandsService.add(project.gitPath, undefined, addWs?.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Staged (${project.name})`);
           break;
         }
@@ -221,7 +227,8 @@ export class TelegramGitHandler {
           break;
         }
         case 'git:log': {
-          const r = await this.gitCommandsService.log(project.gitPath, 5);
+          const logWs = await this.workspaceService.findById(project.workspaceId);
+          const r = await this.gitCommandsService.log(project.gitPath, 5, logWs?.containerId ?? undefined);
           const lines = r.commits.map((c) => `${c.sha.slice(0, 7)} ${c.message}`);
           await this.notificationService.sendRaw(chatId, `📋 Log (${project.name}):\n${lines.join('\n')}`);
           break;
