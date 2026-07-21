@@ -1,20 +1,40 @@
 (function () {
-  const state = window.__INITIAL_STATE__ || {};
+  'use strict';
 
-  const tgWebApp = window.Telegram?.WebApp;
-  const tgInitData = state.initData || tgWebApp?.initData || '';
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 1. Telegram WebApp Setup
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  const headers = tgInitData ? { 'X-Telegram-Init-Data': tgInitData } : {};
-  const main = document.getElementById('app');
-  let activeTerminal = null;
-  let activeSocket = null;
+  var tg = window.Telegram && window.Telegram.WebApp;
+  var state = window.__INITIAL_STATE__ || {};
+  var tgInitData = state.initData || (tg && tg.initData) || '';
+  var headers = tgInitData ? { 'X-Telegram-Init-Data': tgInitData } : {};
+
+  if (tg) {
+    tg.ready();
+    tg.expand();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 2. DOM Refs & State
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  var main = document.getElementById('app');
+  var activeTerminal = null;
+  var activeSocket = null;
+  var toastTimer = null;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 3. Core API Helpers (MUST REMAIN IDENTICAL)
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function api(url, opts) {
-    const h = { ...headers, ...opts?.headers };
-    return fetch(url, { ...opts, headers: h }).then(async (r) => {
+    var h = Object.assign({}, headers, opts && opts.headers);
+    return fetch(url, Object.assign({}, opts, { headers: h })).then(function (r) {
       if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body.message || r.statusText || 'Request failed');
+        return r.json().catch(function () { return {}; }).then(function (body) {
+          throw new Error(body.message || r.statusText || 'Request failed');
+        });
       }
       return r.json().then(function (body) {
         if (body && typeof body === 'object' && 'success' in body && 'data' in body) {
@@ -35,40 +55,298 @@
     return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
   }
 
-  function showError(msg) {
-    main.innerHTML = '<div class="error">' + esc(msg) + '</div>';
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 4. Telegram Haptic & Navigation Helpers
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function haptic(style) {
+    if (tg && tg.HapticFeedback) {
+      tg.HapticFeedback.impactOccurred(style || 'medium');
+    }
   }
 
-  function showLoading() {
-    main.innerHTML = '<div class="loading">Loading...</div>';
+  function updateBackButton(show) {
+    if (!tg) return;
+    if (show) {
+      tg.BackButton.onClick(function () {
+        window.history.back();
+      });
+      tg.BackButton.show();
+    } else {
+      tg.BackButton.hide();
+    }
   }
+
+  function updateMainButton(config) {
+    if (!tg) return;
+    if (!config) {
+      tg.MainButton.hide();
+      tg.MainButton.hideProgress();
+      return;
+    }
+    tg.MainButton.setText(config.text || 'Action');
+    tg.MainButton.onClick(config.callback || function () {});
+    if (config.color) tg.MainButton.color = config.color;
+    if (config.textColor) tg.MainButton.textColor = config.textColor;
+    if (config.progress) tg.MainButton.showProgress();
+    tg.MainButton.show();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 5. Toast Notification System
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function showToast(message, type, duration) {
+    type = type || 'info';
+    duration = duration || 3500;
+
+    var container = document.getElementById('toast-container');
+    if (!container) return;
+
+    var el = document.createElement('div');
+    el.className = 'toast toast-' + type;
+    el.innerHTML = '<span class="toast-dot"></span>'
+      + '<span class="toast-body">' + esc(message) + '</span>'
+      + '<button class="toast-dismiss" onclick="this.parentElement.classList.remove(\'toast-visible\');setTimeout(function(){this.parentElement.remove()}.bind(this),400)" aria-label="Dismiss">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+      + '</button>';
+
+    container.appendChild(el);
+
+    // Trigger enter animation
+    requestAnimationFrame(function () {
+      el.classList.add('toast-visible');
+    });
+
+    // Auto-dismiss
+    var timer = setTimeout(function () {
+      el.classList.remove('toast-visible');
+      setTimeout(function () {
+        if (el.parentNode) el.remove();
+      }, 400);
+    }, duration);
+
+    // Store timer reference for cleanup
+    el._timer = timer;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 6. Skeleton Loading Screens
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function createSkeleton(type) {
+    type = type || 'default';
+
+    var generic = ''
+      + '<div class="skel skel-h1"></div>'
+      + '<div class="skel-card">'
+      + '  <div class="skel skel-h3"></div>'
+      + '  <div class="skel skel-line skel-w-100"></div>'
+      + '  <div class="skel skel-line skel-w-80"></div>'
+      + '  <div class="skel skel-line skel-w-65"></div>'
+      + '  <div class="skel skel-line skel-w-40"></div>'
+      + '</div>'
+      + '<div class="skel-card">'
+      + '  <div class="skel skel-h3"></div>'
+      + '  <div class="skel skel-line skel-w-90"></div>'
+      + '  <div class="skel skel-line skel-w-70"></div>'
+      + '  <div class="skel skel-btn"></div>'
+      + '</div>';
+
+    if (type === 'dashboard') {
+      return ''
+        + '<div class="skel skel-h1"></div>'
+        + '<div class="skel-card">'
+        + '  <div class="skel skel-h3"></div>'
+        + '  <div class="skel skel-line skel-w-100"></div>'
+        + '  <div class="skel skel-line skel-w-80"></div>'
+        + '  <div class="skel skel-line skel-w-50"></div>'
+        + '</div>'
+        + '<div class="skel-card">'
+        + '  <div class="skel skel-h3"></div>'
+        + '  <div class="skel skel-line skel-w-90"></div>'
+        + '  <div class="skel skel-line skel-w-65"></div>'
+        + '  <div class="skel skel-btn"></div>'
+        + '</div>';
+    }
+
+    if (type === 'list') {
+      var items = '';
+      for (var i = 0; i < 4; i++) {
+        items += ''
+          + '<div class="skel-row">'
+          + '  <div class="flex-1">'
+          + '    <div class="skel skel-line skel-w-65"></div>'
+          + '    <div class="skel skel-line skel-w-40" style="margin-top:8px"></div>'
+          + '  </div>'
+          + '</div>';
+      }
+      return '<div class="skel skel-h1"></div><div class="skel-card">' + items + '</div>';
+    }
+
+    if (type === 'detail') {
+      return ''
+        + '<div style="display:flex;gap:12px;margin-bottom:20px">'
+        + '  <div class="skel" style="height:36px;width:80px"></div>'
+        + '  <div class="skel" style="height:36px;flex:1"></div>'
+        + '</div>'
+        + '<div class="skel-card">'
+        + '  <div class="skel skel-h3"></div>'
+        + '  <div class="skel skel-line skel-w-100"></div>'
+        + '  <div class="skel skel-line skel-w-80"></div>'
+        + '  <div class="skel skel-line skel-w-60"></div>'
+        + '</div>'
+        + '<div class="skel-card">'
+        + '  <div class="skel skel-h3"></div>'
+        + '  <div class="skel skel-line skel-w-90"></div>'
+        + '  <div class="skel skel-line skel-w-70"></div>'
+        + '</div>'
+        + '<div class="skel-card">'
+        + '  <div class="skel skel-h3"></div>'
+        + '  <div class="skel skel-line skel-w-85"></div>'
+        + '</div>';
+    }
+
+    return generic;
+  }
+
+  function showLoading(skeletonType) {
+    main.innerHTML = '<div class="anim-fade-in">' + createSkeleton(skeletonType) + '</div>';
+  }
+
+  function showError(msg) {
+    // Use inline error with toast
+    main.innerHTML = ''
+      + '<div class="error-state anim-fade-in">'
+      + '  <div class="error-state-icon">&#9888;</div>'
+      + '  <div class="error-state-title">Something went wrong</div>'
+      + '  <div class="error-state-desc">' + esc(msg) + '</div>'
+      + '  <button class="btn btn-primary" onclick="window.location.reload()">Try Again</button>'
+      + '</div>';
+    showToast(msg, 'error', 5000);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 7. Page Transition
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function transitionTo(html, cb) {
+    main.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+    main.style.opacity = '0';
+    main.style.transform = 'translateY(8px)';
+
+    setTimeout(function () {
+      main.innerHTML = html;
+      main.style.transform = 'translateY(0)';
+      main.style.opacity = '1';
+
+      if (cb) cb();
+
+      setTimeout(function () {
+        main.style.transition = '';
+        main.style.transform = '';
+      }, 200);
+    }, 160);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 8. Bottom Sheet Modal
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  function openSheet(title, bodyHtml) {
+    document.getElementById('sheet-title').textContent = title;
+    document.getElementById('sheet-body').innerHTML = bodyHtml;
+    document.getElementById('sheet-overlay').style.display = 'block';
+    document.getElementById('bottom-sheet').style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+
+    // Trigger animation
+    requestAnimationFrame(function () {
+      document.getElementById('sheet-overlay').classList.add('open');
+      document.getElementById('bottom-sheet').classList.add('open');
+    });
+  }
+
+  window.closeSheet = function () {
+    document.getElementById('sheet-overlay').classList.remove('open');
+    document.getElementById('bottom-sheet').classList.remove('open');
+    document.body.style.overflow = '';
+
+    setTimeout(function () {
+      document.getElementById('sheet-overlay').style.display = 'none';
+      document.getElementById('bottom-sheet').style.display = 'none';
+    }, 350);
+  };
+
+  // Close sheet on overlay click
+  document.addEventListener('click', function (e) {
+    if (e.target.id === 'sheet-overlay') {
+      closeSheet();
+    }
+  });
+
+  // Close sheet on Escape
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      var sheet = document.getElementById('bottom-sheet');
+      if (sheet && sheet.classList.contains('open')) {
+        closeSheet();
+      }
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 9. Confirmation Modal (kept as DOM creation — matches existing pattern)
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function showConfirm(msg, onYes) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal"><p>' + esc(msg) + '</p>'
-      + '<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
-      + '<button class="btn primary" id="confirm-yes">Yes</button></div></div>';
+    haptic('medium');
+
+    var overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = ''
+      + '<div class="confirm-modal anim-fade-in">'
+      + '  <p>' + esc(msg) + '</p>'
+      + '  <div class="btn-group">'
+      + '    <button class="btn btn-ghost" onclick="this.closest(\'.confirm-overlay\').remove()">Cancel</button>'
+      + '    <button class="btn btn-primary" id="confirm-yes" style="min-width:80px">Yes</button>'
+      + '  </div>'
+      + '</div>';
+
     document.body.appendChild(overlay);
+
+    // Close on overlay click
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) overlay.remove();
+    });
+
     document.getElementById('confirm-yes').onclick = function () {
       overlay.remove();
       onYes();
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 10. Navigation & Router
+  // ═══════════════════════════════════════════════════════════════════════════
+
   function renderNav(activeRoute) {
-    document.querySelectorAll('.nav-link').forEach((el) => {
+    // Top nav
+    document.querySelectorAll('.nav-link').forEach(function (el) {
       el.classList.toggle('active', el.dataset.route === activeRoute);
     });
-    const navUser = document.getElementById('navUser');
+    // Bottom nav
+    document.querySelectorAll('.nav-item').forEach(function (el) {
+      el.classList.toggle('active', el.dataset.route === activeRoute);
+    });
+    // User name
+    var navUser = document.getElementById('navUser');
     if (state.userName) navUser.textContent = state.userName;
   }
 
-  // ─── Router ──────────────────────────────────────────────────────
-
   function parseRoute(hash) {
-    const h = hash.replace(/^#/, '') || 'dashboard';
-    const parts = h.split('/');
+    var h = hash.replace(/^#/, '') || 'dashboard';
+    var parts = h.split('/');
     return { screen: parts[0], id: parts[1] || null, extra: parts[2] || null };
   }
 
@@ -76,12 +354,32 @@
     window.location.hash = hash;
   }
 
-  window.addEventListener('hashchange', renderRoute);
+  window.addEventListener('hashchange', function () {
+    // Clear any main button
+    updateMainButton(null);
+    // Fade out then render
+    main.style.transition = 'opacity 0.12s ease';
+    main.style.opacity = '0';
+    setTimeout(function () {
+      renderRoute();
+    }, 120);
+  });
 
   function renderRoute() {
     try {
-      const route = parseRoute(window.location.hash);
+      var route = parseRoute(window.location.hash);
       renderNav(route.screen);
+
+      // Telegram back button
+      updateBackButton(route.screen !== 'dashboard');
+
+      // Closing confirmation for active sessions
+      if (tg && activeSocket && activeSocket.connected) {
+        tg.enableClosingConfirmation();
+      } else if (tg) {
+        tg.disableClosingConfirmation();
+      }
+
       switch (route.screen) {
         case 'dashboard': renderDashboard(); break;
         case 'workspaces': renderWorkspaceList(); break;
@@ -93,192 +391,297 @@
         default: renderDashboard();
       }
     } catch (e) {
-      main.innerHTML = '<div class="error">Render error: ' + esc(e.message || e) + '</div>';
+      main.innerHTML = '<div class="error-state anim-fade-in"><div class="error-state-title">Render Error</div><div class="error-state-desc">' + esc(e.message || e) + '</div></div>';
+      showToast('Failed to render page: ' + (e.message || e), 'error');
     }
   }
 
-  // ─── Dashboard ───────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 11. Dashboard
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderDashboard() {
-    const ws = state.workspaces?.find((w) => w.active);
-    const sess = state.activeSession;
+    var ws = null;
+    for (var i = 0; i < (state.workspaces || []).length; i++) {
+      if (state.workspaces[i].active) { ws = state.workspaces[i]; break; }
+    }
+    var sess = state.activeSession;
 
-    let html = '<h1>Dashboard</h1>';
+    var html = '<h1 class="anim-slide-up">Dashboard</h1>';
+
+    // Active Workspace Card
     if (ws) {
-      html += '<div class="card"><h3>Active Workspace</h3>';
-      html += '<div class="card-row"><span class="label">Name</span><span class="value">' + esc(ws.name) + '</span></div>';
-      html += '<div class="card-row"><span class="label">Provider</span><span class="value">' + esc(ws.providerId || 'Not configured') + '</span></div>';
-      html += '<div class="card-row"><span class="label">Model</span><span class="value">' + esc(ws.model || 'Not selected') + '</span></div>';
-      html += '<div class="card-row"><span class="label">Projects</span><span class="value">' + ws.projectCount + '</span></div>';
-      html += '<div class="card-row"><span class="label">Git</span><span class="value">' + (ws.hasGitToken ? 'Configured' : 'Not configured') + '</span></div>';
-      html += '<div class="actions">';
-      html += '<button class="btn" onclick="location.hash=\'#workspace/' + ws.id + '\'">&#9881; Settings</button>';
-      html += '<button class="btn" onclick="location.hash=\'#git/' + ws.id + '\'">&#128196; Git</button>';
-      html += '</div></div>';
+      html += '<div class="card card-hoverable anim-slide-up" style="animation-delay:0.05s" onclick="location.hash=\'#workspace/' + ws.id + '\'">'
+        + '<div class="card-header"><h3>Active Workspace</h3>' + renderBadge(ws.providerId || 'no provider', ws.providerId ? 'info' : 'neutral') + '</div>'
+        + '<div class="card-section"><div class="card-row"><span class="label">Name</span><span class="value">' + esc(ws.name) + '</span></div>'
+        + '<div class="card-row"><span class="label">Model</span><span class="value">' + esc(ws.model || 'Not selected') + '</span></div>'
+        + '<div class="card-row"><span class="label">Projects</span><span class="value">' + (ws.projectCount || 0) + '</span></div>'
+        + '<div class="card-row"><span class="label">Git</span><span class="value">' + (ws.hasGitToken ? '<span class="badge badge-success">Configured</span>' : '<span class="badge badge-neutral">Not set</span>') + '</span></div>'
+        + '</div>'
+        + '<div class="btn-group" style="margin-top:var(--space-3)">'
+        + '<button class="btn" onclick="event.stopPropagation();location.hash=\'#workspace/' + ws.id + '\'">&#9881; Settings</button>'
+        + '<button class="btn" onclick="event.stopPropagation();location.hash=\'#git/' + ws.id + '\'">&#128196; Git</button>'
+        + '</div>'
+        + '</div>';
     } else {
-      html += '<div class="card"><p>No active workspace. <a href="#workspaces">Create or switch</a>.</p></div>';
+      html += '<div class="card anim-slide-up" style="animation-delay:0.05s">'
+        + '<div class="empty-state" style="padding:var(--space-6) 0">'
+        + '<div class="empty-state-icon">&#128451;</div>'
+        + '<div class="empty-state-title">No Active Workspace</div>'
+        + '<div class="empty-state-desc">Create or switch to a workspace to get started.</div>'
+        + '<button class="btn btn-primary" onclick="location.hash=\'#workspaces\'">Go to Workspaces</button>'
+        + '</div>'
+        + '</div>';
     }
 
+    // Active Session / New Session Card
     if (sess) {
-      html += '<div class="card"><h3>Active Session</h3>';
-      html += '<div class="card-row"><span class="label">ID</span><span class="value">' + esc(sess.publicId) + '</span></div>';
-      html += '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge ' + (sess.running ? 'badge-green' : 'badge-red') + '">' + (sess.running ? 'Running' : 'Stopped') + '</span></span></div>';
-      html += '<div class="card-row"><span class="label">Prompt</span><span class="value">' + esc(sess.prompt) + '</span></div>';
-      html += '<div class="actions">';
-      html += '<button class="btn primary" onclick="location.hash=\'#session/' + sess.id + '\'">&#9000; Open Terminal</button>';
-      html += '</div></div>';
-    } else {
-      html += '<div class="card"><h3>New Session</h3><p>Send a prompt to start a session.</p>';
-      html += '<div class="form-group"><label>Prompt</label>';
-      html += '<input type="text" id="prompt-input" placeholder="e.g. Fix the login bug"';
-      html += ' onkeydown="if(event.key===\'Enter\')startSession(this.value)"></div>';
-      html += '<button class="btn primary" onclick="startSession(document.getElementById(\'prompt-input\').value)">&#9654; Start</button>';
-      html += '</div>';
+      html += '<div class="card anim-slide-up" style="animation-delay:0.1s">'
+        + '<div class="card-header"><h3>Active Session</h3>' + (sess.running ? '<span class="badge badge-success">Running</span>' : '<span class="badge badge-danger">Stopped</span>') + '</div>'
+        + '<div class="card-section"><div class="card-row"><span class="label">ID</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(sess.publicId || sess.id) + '</span></div>'
+        + '<div class="card-row"><span class="label">Prompt</span><span class="value">' + esc((sess.prompt || '').slice(0, 100)) + '</span></div>'
+        + '</div>'
+        + '<button class="btn btn-primary btn-block" onclick="location.hash=\'#session/' + sess.id + '\'">&#9000; Open Terminal</button>'
+        + '</div>';
+    } else if (ws) {
+      html += '<div class="card anim-slide-up" style="animation-delay:0.1s">'
+        + '<h3>New Session</h3>'
+        + '<p>Send a prompt to start an AI coding session in this workspace.</p>'
+        + '<div class="dashboard-prompt">'
+        + '  <div class="form-group" style="flex:1;margin-bottom:0">'
+        + '    <input type="text" class="form-input" id="prompt-input" placeholder="e.g. Fix the login bug..."'
+        + '      onkeydown="if(event.key===\'Enter\'){var v=this.value;if(v){showToast(\'Starting session...\',\'info\');startSession(v)}}">'
+        + '  </div>'
+        + '  <button class="btn btn-primary btn-icon" onclick="var v=document.getElementById(\'prompt-input\').value;if(v){showToast(\'Starting session...\',\'info\');startSession(v)}" title="Start Session" aria-label="Start Session">'
+        + '    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>'
+        + '  </button>'
+        + '</div>'
+        + '</div>';
     }
 
-    if (!sess && ws) {
-      html += '<div class="card"><h3>Quick Links</h3>';
-      html += '<div class="actions">';
-      html += '<button class="btn" onclick="location.hash=\'#workspaces\'">&#128451; All Workspaces</button>';
-      html += '<button class="btn" onclick="location.hash=\'#sessions\'">&#128195; All Sessions</button>';
-      html += '</div></div>';
-    }
+    // Quick Links
+    html += '<div class="card anim-slide-up" style="animation-delay:0.15s">'
+      + '<h3>Quick Links</h3>'
+      + '<div class="btn-group">'
+      + '<button class="btn btn-ghost" onclick="location.hash=\'#workspaces\'">&#128451; All Workspaces</button>'
+      + '<button class="btn btn-ghost" onclick="location.hash=\'#sessions\'">&#128195; All Sessions</button>'
+      + '</div>'
+      + '</div>';
 
-    main.innerHTML = html;
+    html += '<div style="height:var(--space-4)"></div>';
+
+    transitionTo(html);
   }
 
   window.startSession = function (prompt) {
     if (!prompt) return;
-    showLoading();
-    api('/api/sessions', { method: 'POST', body: JSON.stringify({ prompt }), headers: { 'Content-Type': 'application/json', ...headers } })
-      .then((s) => { navigate('#session/' + s.id); })
-      .catch((e) => { showError(e.message); });
+    showLoading('detail');
+    api('/api/sessions', { method: 'POST', body: JSON.stringify({ prompt: prompt }), headers: { 'Content-Type': 'application/json' } })
+      .then(function (s) {
+        haptic('medium');
+        navigate('#session/' + s.id);
+      })
+      .catch(function (e) {
+        showError(e.message);
+      });
   };
 
-  // ─── Workspace List ──────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 12. Workspace List
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderWorkspaceList() {
-    showLoading();
-    api('/api/workspaces').then((workspaces) => {
+    showLoading('list');
+    api('/api/workspaces').then(function (workspaces) {
       if (!Array.isArray(workspaces)) workspaces = [];
-      let html = '<h1>Workspaces</h1>';
-      html += '<div class="card">';
+
+      var html = '<h1 class="anim-slide-up">Workspaces</h1>'
+        + '<div class="card">';
+
       if (workspaces.length === 0) {
-        html += '<p>No workspaces yet.</p>';
+        html += '<div class="empty-state">'
+          + '<div class="empty-state-icon">&#128193;</div>'
+          + '<div class="empty-state-title">No Workspaces Yet</div>'
+          + '<div class="empty-state-desc">Create a workspace to start managing your AI coding projects.</div>'
+          + '</div>';
       } else {
-        for (const w of workspaces) {
-          const badges = [];
-          if (w.active) badges.push('<span class="badge badge-green">active</span>');
-          if (w.providerId) badges.push('<span class="badge badge-blue">' + esc(w.providerId) + '</span>');
-          html += '<div class="ws-list-item" onclick="location.hash=\'#workspace/' + w.id + '\'">';
-          html += '<div class="info"><div class="name">' + esc(w.name) + ' ' + badges.join('') + '</div>';
-          html += '<div class="meta">Model: ' + esc(w.model || '—') + ' &middot; Projects: ' + w.projectCount + ' &middot; Sessions: ' + w.sessionCount + '</div>';
-          html += '</div></div>';
+        for (var i = 0; i < workspaces.length; i++) {
+          var w = workspaces[i];
+          var badges = '';
+          if (w.active) badges += renderBadge('active', 'success') + ' ';
+          if (w.providerId) badges += renderBadge(w.providerId, 'info') + ' ';
+
+          html += '<div class="list-item" onclick="location.hash=\'#workspace/' + w.id + '\'">'
+            + '<div class="info">'
+            + '<div class="primary">' + esc(w.name) + ' ' + badges + '</div>'
+            + '<div class="secondary">Model: ' + esc(w.model || '\u2014') + ' \u00B7 Projects: ' + (w.projectCount || 0) + ' \u00B7 Sessions: ' + (w.sessionCount || 0) + '</div>'
+            + '</div>'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--tg-hint)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'
+            + '</div>';
         }
       }
+
       html += '</div>';
-      main.innerHTML = html;
-    }).catch((e) => { showError(e.message); });
+      html += '<div style="height:var(--space-4)"></div>';
+      transitionTo(html);
+    }).catch(function (e) {
+      showError(e.message);
+    });
   }
 
-  // ─── Workspace Settings ──────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 13. Workspace Settings
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderWorkspaceSettings(id) {
-    showLoading();
+    showLoading('detail');
     Promise.all([
       api('/api/workspaces/' + id),
-      api('/api/git/' + id + '/credentials').catch(() => ({ isSet: false })),
-    ]).then(([ws, gitStatus]) => {
-      let html = '<h1>' + esc(ws.name) + '</h1>';
-      html += '<div class="actions"><button class="btn" onclick="location.hash=\'#workspaces\'">&#8592; Back</button>';
-      html += '<button class="btn ' + (ws.active ? '' : 'primary') + '" onclick="activateWorkspace(\'' + id + '\')">' + (ws.active ? 'Active' : 'Set Active') + '</button></div>';
+      api('/api/git/' + id + '/credentials').catch(function () { return { isSet: false }; }),
+    ]).then(function (results) {
+      var ws = results[0];
+      var gitStatus = results[1];
 
-      html += '<div class="card"><h3>Provider & Model</h3>';
-      html += '<div class="form-group"><label>Provider</label>';
-      html += '<select id="provider-select" onchange="onProviderChange(\'' + id + '\')">';
-      for (const p of ['', 'opencode', 'openai', 'anthropic', 'github-copilot']) {
-        html += '<option value="' + p + '"' + (ws.providerId === p ? ' selected' : '') + '>' + (p || 'None') + '</option>';
+      var html = '<div class="ws-detail-header anim-slide-up">'
+        + '<button class="btn btn-ghost btn-sm" onclick="location.hash=\'#workspaces\'" aria-label="Back">'
+        + '  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+        + '</button>'
+        + '<h1>' + esc(ws.name) + '</h1>'
+        + '<button class="btn ' + (ws.active ? 'btn-ghost' : 'btn-primary') + ' btn-sm" onclick="activateWorkspace(\'' + id + '\')">' + (ws.active ? 'Active' : 'Set Active') + '</button>'
+        + '</div>';
+
+      // Provider & Model
+      html += '<div class="card anim-slide-up" style="animation-delay:0.05s">'
+        + '<h3>Provider &amp; Model</h3>';
+
+      html += '<div class="form-group">'
+        + '<label class="form-label">Provider</label>'
+        + '<select class="form-input" id="provider-select" onchange="onProviderChange(\'' + id + '\')">';
+      var providers = ['', 'opencode', 'openai', 'anthropic', 'github-copilot'];
+      for (var pi = 0; pi < providers.length; pi++) {
+        var pv = providers[pi];
+        html += '<option value="' + pv + '"' + (ws.providerId === pv ? ' selected' : '') + '>' + (pv || 'None') + '</option>';
       }
       html += '</select></div>';
-      html += '<div class="form-group" id="apikey-group" style="display:' + (ws.providerId ? 'block' : 'none') + '"><label>API Key</label>';
-      html += '<input type="password" id="apikey-input" placeholder="Enter API key" value="' + esc(ws.apiKey || '') + '"></div>';
-      html += '<button class="btn primary" onclick="saveProvider(\'' + id + '\')">Save Provider</button>';
 
-      html += '<div class="form-group mt-8"><label>Model</label>';
-      html += '<select id="model-select"><option value="">Loading models...</option></select></div>';
-      html += '<button class="btn primary" onclick="saveModel(\'' + id + '\')">Save Model</button></div>';
+      html += '<div class="form-group" id="apikey-group" style="display:' + (ws.providerId ? 'block' : 'none') + '">'
+        + '<label class="form-label">API Key</label>'
+        + '<input type="password" class="form-input" id="apikey-input" placeholder="Enter API key" value="' + esc(ws.apiKey || '') + '">'
+        + '</div>';
 
-      html += '<div class="card"><h3>Projects</h3>';
-      if (ws.projects?.length) {
-        for (const p of ws.projects) {
-          html += '<div class="ws-list-item" onclick="location.hash=\'#project/' + p.id + '\'">';
-          html += '<div class="info"><div class="name">' + esc(p.name) + '</div>';
-          html += '<div class="meta">' + esc(p.path || '.') + (p.gitPath ? ' &middot; ' + esc(p.branch || 'main') : '') + '</div>';
-          html += '</div></div>';
+      html += '<button class="btn btn-primary btn-block" onclick="saveProvider(\'' + id + '\')">Save Provider</button>';
+
+      html += '<div class="form-group mt-4">'
+        + '<label class="form-label">Model</label>'
+        + '<select class="form-input" id="model-select"><option value="">Loading models...</option></select>'
+        + '</div>';
+
+      html += '<button class="btn btn-primary btn-block" onclick="saveModel(\'' + id + '\')">Save Model</button>'
+        + '</div>';
+
+      // Projects
+      html += '<div class="card anim-slide-up" style="animation-delay:0.1s">'
+        + '<div class="card-header"><h3>Projects</h3><button class="btn btn-sm btn-primary" onclick="showAddProjectModal(\'' + id + '\')">+ Add</button></div>';
+
+      if (ws.projects && ws.projects.length) {
+        for (var pj = 0; pj < ws.projects.length; pj++) {
+          var p = ws.projects[pj];
+          html += '<div class="list-item" onclick="location.hash=\'#project/' + p.id + '\'">'
+            + '<div class="info"><div class="primary">' + esc(p.name) + '</div>'
+            + '<div class="secondary">' + esc(p.path || '.') + (p.gitPath ? ' \u00B7 ' + esc(p.branch || 'main') : '') + '</div></div>'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--tg-hint)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>'
+            + '</div>';
         }
       } else {
-        html += '<p>No projects.</p>';
-      }
-      html += '<div class="actions"><button class="btn" onclick="showAddProjectModal(\'' + id + '\')">+ Add Project</button></div></div>';
-
-      html += '<div class="card"><h3>Git Credentials</h3>';
-      if (gitStatus.isSet) {
-        html += '<div class="card-row"><span class="label">Status</span><span class="value">Logged in as ' + esc(gitStatus.username || '') + '</span></div>';
-        html += '<div class="card-row"><span class="label">Token</span><span class="value">' + esc(gitStatus.tokenMasked || '') + '</span></div>';
-        html += '<div class="actions"><button class="btn danger" onclick="logoutGit(\'' + id + '\')">Logout</button></div>';
-      } else {
-        html += '<p>Not configured.</p>';
-        html += '<div class="form-group mt-8"><label>Username</label><input type="text" id="git-user" placeholder="Git username"></div>';
-        html += '<div class="form-group"><label>Token</label><input type="password" id="git-token" placeholder="Personal access token"></div>';
-        html += '<div class="form-group"><label>Remote URL</label><input type="text" id="git-url" placeholder="https://github.com/org/repo.git"></div>';
-        html += '<button class="btn primary" onclick="saveGitCredentials(\'' + id + '\')">Save Credentials</button>';
+        html += '<p style="padding:var(--space-2) 0">No projects yet. Add one to get started.</p>';
       }
       html += '</div>';
 
-      main.innerHTML = html;
+      // Git Credentials
+      html += '<div class="card anim-slide-up" style="animation-delay:0.15s">'
+        + '<h3>Git Credentials</h3>';
 
-      if (ws.providerId) {
-        loadModels(id);
+      if (gitStatus.isSet) {
+        html += '<div class="card-section">'
+          + '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge badge-success">Logged In</span></span></div>'
+          + '<div class="card-row"><span class="label">Username</span><span class="value">' + esc(gitStatus.username || '') + '</span></div>'
+          + '<div class="card-row"><span class="label">Token</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(gitStatus.tokenMasked || '') + '</span></div>'
+          + '</div>'
+          + '<button class="btn btn-danger btn-block" onclick="logoutGit(\'' + id + '\')">Logout Git Credentials</button>';
+      } else {
+        html += '<p>Not configured. Add your Git credentials to enable version control operations.</p>'
+          + '<div class="form-group"><label class="form-label">Username</label><input type="text" class="form-input" id="git-user" placeholder="Git username"></div>'
+          + '<div class="form-group"><label class="form-label">Token</label><input type="password" class="form-input" id="git-token" placeholder="Personal access token"></div>'
+          + '<div class="form-group"><label class="form-label">Remote URL</label><input type="text" class="form-input" id="git-url" placeholder="https://github.com/org/repo.git"></div>'
+          + '<button class="btn btn-primary btn-block" onclick="saveGitCredentials(\'' + id + '\')">Save Credentials</button>';
       }
-    }).catch((e) => { showError(e.message); });
+      html += '</div>';
+
+      html += '<div style="height:var(--space-4)"></div>';
+      transitionTo(html, function () {
+        if (ws.providerId) {
+          loadModels(id);
+        }
+      });
+    }).catch(function (e) {
+      showError(e.message);
+    });
   }
 
   window.onProviderChange = function () {
-    document.getElementById('apikey-group').style.display = 'block';
+    var group = document.getElementById('apikey-group');
+    if (group) group.style.display = 'block';
   };
 
   window.saveProvider = function (id) {
-    const providerId = document.getElementById('provider-select').value;
-    const apiKey = document.getElementById('apikey-input').value;
-    if (!providerId) return;
-    showLoading();
+    var providerId = document.getElementById('provider-select').value;
+    var apiKey = document.getElementById('apikey-input').value;
+    if (!providerId) { showToast('Please select a provider', 'warning'); return; }
+    haptic('medium');
+    showLoading('detail');
     api('/api/workspaces/' + id, {
       method: 'PATCH',
-      body: JSON.stringify({ providerId, apiKey }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then(() => { renderWorkspaceSettings(id); }).catch((e) => { showError(e.message); });
+      body: JSON.stringify({ providerId: providerId, apiKey: apiKey }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function () {
+      showToast('Provider saved successfully', 'success');
+      renderWorkspaceSettings(id);
+    }).catch(function (e) {
+      showError(e.message);
+    });
   };
 
   window.saveModel = function (id) {
-    const model = document.getElementById('model-select').value;
-    if (!model) return;
-    showLoading();
+    var model = document.getElementById('model-select').value;
+    if (!model) { showToast('Please select a model', 'warning'); return; }
+    haptic('medium');
+    showLoading('detail');
     api('/api/workspaces/' + id, {
       method: 'PATCH',
-      body: JSON.stringify({ model }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then(() => { renderWorkspaceSettings(id); }).catch((e) => { showError(e.message); });
+      body: JSON.stringify({ model: model }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function () {
+      showToast('Model saved successfully', 'success');
+      renderWorkspaceSettings(id);
+    }).catch(function (e) {
+      showError(e.message);
+    });
   };
 
   function loadModels(id) {
     var sel = document.getElementById('model-select');
     if (!sel) return;
     sel.innerHTML = '<option value="">Loading models...</option>';
-    api('/api/workspaces/' + id + '/models').then((models) => {
+    api('/api/workspaces/' + id + '/models').then(function (models) {
       if (!Array.isArray(models)) models = [];
       sel = document.getElementById('model-select');
       if (!sel) return;
-      var currentModel = state.workspaces ? state.workspaces.find(function (w) { return w.id === id; }) : null;
+      var currentModel = null;
+      if (state.workspaces) {
+        for (var i = 0; i < state.workspaces.length; i++) {
+          if (state.workspaces[i].id === id) { currentModel = state.workspaces[i].model; break; }
+        }
+      }
       sel.innerHTML = '<option value="">Select model...</option>';
       if (models.length === 0) {
         sel.innerHTML = '<option value="">No models available</option>';
@@ -286,7 +689,7 @@
       }
       for (var i = 0; i < models.length; i++) {
         var m = models[i];
-        sel.innerHTML += '<option value="' + esc(m) + '"' + (currentModel && currentModel.model === m ? ' selected' : '') + '>' + esc(m) + '</option>';
+        sel.innerHTML += '<option value="' + esc(m) + '"' + (currentModel === m ? ' selected' : '') + '>' + esc(m) + '</option>';
       }
     }).catch(function () {
       sel = document.getElementById('model-select');
@@ -295,74 +698,141 @@
   }
 
   window.activateWorkspace = function (id) {
-    api('/api/workspaces/' + id + '/activate', { method: 'POST' }).then(() => {
-      state.workspaces = state.workspaces.map((w) => ({ ...w, active: w.id === id }));
+    haptic('medium');
+    api('/api/workspaces/' + id + '/activate', { method: 'POST' }).then(function () {
+      state.workspaces = (state.workspaces || []).map(function (w) {
+        return Object.assign({}, w, { active: w.id === id });
+      });
+      showToast('Workspace activated', 'success');
       renderWorkspaceSettings(id);
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      showError(e.message);
+    });
   };
 
   window.showAddProjectModal = function (wsId) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal"><h3>Add Project</h3>'
-      + '<div class="form-group"><label>Name</label><input type="text" id="proj-name" placeholder="backend"></div>'
-      + '<div class="form-group"><label>Path (relative)</label><input type="text" id="proj-path" placeholder="."></div>'
-      + '<div class="form-group"><label>Remote URL (optional)</label><input type="text" id="proj-url" placeholder="https://github.com/org/repo.git"></div>'
-      + '<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
-      + '<button class="btn primary" onclick="addProject(\'' + wsId + '\', this)">Add</button></div></div>';
-    document.body.appendChild(overlay);
+    haptic('medium');
+    var bodyHtml = ''
+      + '<div class="form-group">'
+      + '  <label class="form-label">Project Name</label>'
+      + '  <input type="text" class="form-input" id="proj-name" placeholder="e.g. backend" autocomplete="off">'
+      + '  <div class="form-error">Name is required</div>'
+      + '</div>'
+      + '<div class="form-group">'
+      + '  <label class="form-label">Path (relative)</label>'
+      + '  <input type="text" class="form-input" id="proj-path" placeholder="e.g. ./apps/backend" value="." autocomplete="off">'
+      + '  <div class="form-error">Path is required</div>'
+      + '</div>'
+      + '<div class="form-group">'
+      + '  <label class="form-label">Remote URL (optional)</label>'
+      + '  <input type="text" class="form-input" id="proj-url" placeholder="https://github.com/org/repo.git" autocomplete="off">'
+      + '</div>'
+      + '<button class="btn btn-primary btn-block mt-4" onclick="addProject(\'' + wsId + '\', this)">Add Project</button>';
+
+    openSheet('Add Project', bodyHtml);
+
+    // Focus first input
+    setTimeout(function () {
+      var inp = document.getElementById('proj-name');
+      if (inp) inp.focus();
+    }, 400);
   };
 
   window.addProject = function (wsId, btn) {
-    const name = document.getElementById('proj-name').value;
-    const path = document.getElementById('proj-path').value;
-    const remoteUrl = document.getElementById('proj-url').value || undefined;
-    if (!name || !path) return;
-    btn.textContent = 'Adding...';
+    var name = document.getElementById('proj-name').value.trim();
+    var path = document.getElementById('proj-path').value.trim();
+    var remoteUrl = document.getElementById('proj-url').value.trim() || undefined;
+
+    // Validation
+    var valid = true;
+    if (!name) {
+      document.getElementById('proj-name').classList.add('error');
+      valid = false;
+    } else {
+      document.getElementById('proj-name').classList.remove('error');
+    }
+    if (!path) {
+      document.getElementById('proj-path').classList.add('error');
+      valid = false;
+    } else {
+      document.getElementById('proj-path').classList.remove('error');
+    }
+    if (!valid) return;
+
+    haptic('medium');
+    btn.disabled = true;
+    btn.textContent = 'Adding\u2026';
+
     api('/api/workspaces/' + wsId + '/projects', {
       method: 'POST',
-      body: JSON.stringify({ name, path, remoteUrl }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then(() => {
-      btn.closest('.modal-overlay').remove();
+      body: JSON.stringify({ name: name, path: path, remoteUrl: remoteUrl }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function () {
+      closeSheet();
+      showToast('Project "' + esc(name) + '" added', 'success');
       renderWorkspaceSettings(wsId);
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'Add Project';
+      showToast(e.message, 'error');
+    });
   };
 
   window.saveGitCredentials = function (id) {
-    const username = document.getElementById('git-user').value;
-    const token = document.getElementById('git-token').value;
-    const remoteUrl = document.getElementById('git-url').value || undefined;
-    if (!username || !token) return;
-    showLoading();
+    var username = document.getElementById('git-user').value.trim();
+    var token = document.getElementById('git-token').value.trim();
+    var remoteUrl = document.getElementById('git-url').value.trim() || undefined;
+
+    if (!username) { showToast('Username is required', 'warning'); return; }
+    if (!token) { showToast('Token is required', 'warning'); return; }
+
+    haptic('medium');
+    showLoading('detail');
     api('/api/git/' + id + '/credentials', {
       method: 'POST',
-      body: JSON.stringify({ username, token, remoteUrl }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then((r) => {
-      if (r.valid === false) { showError(r.error); return; }
+      body: JSON.stringify({ username: username, token: token, remoteUrl: remoteUrl }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function (r) {
+      if (r && r.valid === false) {
+        showToast(r.error || 'Invalid credentials', 'error');
+        renderWorkspaceSettings(id);
+        return;
+      }
+      showToast('Git credentials saved', 'success');
       renderWorkspaceSettings(id);
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      showError(e.message);
+    });
   };
 
   window.logoutGit = function (id) {
-    showLoading();
-    api('/api/git/' + id + '/credentials', { method: 'DELETE' }).then(() => {
-      renderWorkspaceSettings(id);
-    }).catch((e) => { showError(e.message); });
+    showConfirm('Logout from Git?', function () {
+      showLoading('detail');
+      api('/api/git/' + id + '/credentials', { method: 'DELETE' }).then(function () {
+        showToast('Git credentials removed', 'success');
+        renderWorkspaceSettings(id);
+      }).catch(function (e) {
+        showError(e.message);
+      });
+    });
   };
 
-  // ─── Project Detail ──────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 14. Project Detail
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderProjectDetail(id) {
-    showLoading();
-    api('/api/workspaces').then((workspaces) => {
+    showLoading('detail');
+    api('/api/workspaces').then(function (workspaces) {
       if (!Array.isArray(workspaces)) workspaces = [];
-      let found = null;
-      let wsId = '';
-      for (const w of workspaces) {
-        for (const p of (w.projects || [])) {
-          if (p.id === id) { found = p; wsId = w.id; break; }
+      var found = null;
+      var wsId = '';
+      for (var wi = 0; wi < workspaces.length; wi++) {
+        var w = workspaces[wi];
+        if (w.projects) {
+          for (var pi = 0; pi < w.projects.length; pi++) {
+            if (w.projects[pi].id === id) { found = w.projects[pi]; wsId = w.id; break; }
+          }
         }
         if (found) break;
       }
@@ -371,187 +841,293 @@
       return Promise.all([
         api('/api/git/' + wsId + '/status?projectId=' + id),
         api('/api/git/' + wsId + '/branches?projectId=' + id),
-      ]).then(([status, branches]) => {
-        renderProjectHTML(wsId, found, status, branches);
+      ]).then(function (results) {
+        renderProjectHTML(wsId, found, results[0], results[1]);
       });
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      showError(e.message);
+    });
   }
 
   function renderProjectHTML(wsId, proj, status, branches) {
-    let html = '<h1>' + esc(proj.name) + '</h1>';
-    html += '<div class="actions"><button class="btn" onclick="location.hash=\'#workspace/' + wsId + '\'">&#8592; Back</button></div>';
+    var html = '<div class="ws-detail-header anim-slide-up">'
+      + '<button class="btn btn-ghost btn-sm" onclick="location.hash=\'#workspace/' + wsId + '\'" aria-label="Back">'
+      + '  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+      + '</button>'
+      + '<h1>' + esc(proj.name) + '</h1>'
+      + '</div>';
 
-    html += '<div class="card"><h3>Status</h3>';
-    html += '<div class="card-row"><span class="label">Branch</span><span class="value">' + esc(status.branch || '—') + '</span></div>';
-    html += '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge ' + (status.clean ? 'badge-green' : 'badge-red') + '">' + (status.clean ? 'Clean' : 'Dirty') + '</span></span></div>';
-    if (status.files?.length) {
-      html += '<div class="card-row"><span class="label">Changed Files</span><span class="value">' + esc(status.files.join(', ').slice(0, 200)) + '</span></div>';
+    // Status Card
+    html += '<div class="card anim-slide-up" style="animation-delay:0.05s">'
+      + '<h3>Status</h3>'
+      + '<div class="card-section">'
+      + '<div class="card-row"><span class="label">Branch</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(status.branch || '\u2014') + '</span></div>'
+      + '<div class="card-row"><span class="label">Status</span><span class="value">' + (status.clean ? '<span class="badge badge-success">Clean</span>' : '<span class="badge badge-danger">Dirty</span>') + '</span></div>';
+
+    if (status.files && status.files.length) {
+      html += '<div class="card-row"><span class="label">Changed Files</span><span class="value" style="font-family:var(--font-mono);font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis">' + esc(status.files.join(', ').slice(0, 200)) + '</span></div>';
     }
-    html += '</div>';
-
-    html += '<div class="card"><h3>Actions</h3><div class="grid-2">';
-    html += '<button class="btn" onclick="gitDiff(\'' + wsId + '\',\'' + proj.id + '\')">&#128221; Diff</button>';
-    html += '<button class="btn" onclick="gitStatus(\'' + wsId + '\',\'' + proj.id + '\')">&#128200; Status</button>';
-    html += '<button class="btn primary" onclick="showCommitModal(\'' + wsId + '\',\'' + proj.id + '\')">&#128190; Commit</button>';
-    html += '<button class="btn" onclick="gitAction(\'' + wsId + '\',\'' + proj.id + '\',\'push\')">&#128640; Push</button>';
-    html += '<button class="btn" onclick="gitAction(\'' + wsId + '\',\'' + proj.id + '\',\'pull\')">&#128229; Pull</button>';
-    html += '<button class="btn" onclick="gitLog(\'' + wsId + '\',\'' + proj.id + '\')">&#128214; Log</button>';
     html += '</div></div>';
 
-    html += '<div class="card"><h3>Branches</h3>';
-    if (branches.branches?.length) {
-      for (const b of branches.branches) {
-        const isCurrent = b === branches.current;
-        html += '<div class="card-row"><span class="value">' + (isCurrent ? '&#128073; ' : '') + esc(b) + '</span>';
+    // Actions
+    html += '<div class="card anim-slide-up" style="animation-delay:0.1s">'
+      + '<h3>Git Actions</h3>'
+      + '<div class="grid-2" style="margin-top:var(--space-3)">'
+      + '<button class="btn" onclick="gitDiff(\'' + wsId + '\',\'' + proj.id + '\')">&#128221; Diff</button>'
+      + '<button class="btn" onclick="gitStatus(\'' + wsId + '\',\'' + proj.id + '\')">&#128200; Status</button>'
+      + '<button class="btn btn-primary" onclick="showCommitModal(\'' + wsId + '\',\'' + proj.id + '\')">&#128190; Commit</button>'
+      + '<button class="btn" onclick="gitAction(\'' + wsId + '\',\'' + proj.id + '\',\'push\')">&#128640; Push</button>'
+      + '<button class="btn" onclick="gitAction(\'' + wsId + '\',\'' + proj.id + '\',\'pull\')">&#128229; Pull</button>'
+      + '<button class="btn" onclick="gitLog(\'' + wsId + '\',\'' + proj.id + '\')">&#128214; Log</button>'
+      + '</div>'
+      + '</div>';
+
+    // Branches
+    html += '<div class="card anim-slide-up" style="animation-delay:0.15s">'
+      + '<h3>Branches</h3>';
+    if (branches.branches && branches.branches.length) {
+      for (var bi = 0; bi < branches.branches.length; bi++) {
+        var b = branches.branches[bi];
+        var isCurrent = b === branches.current;
+        html += '<div class="card-row">'
+          + '<span class="value" style="font-family:var(--font-mono);font-size:13px">'
+          + (isCurrent ? '<span style="color:var(--tg-success)">&#128073;</span> ' : '') + esc(b)
+          + '</span>';
         if (!isCurrent) {
-          html += '<button class="btn" onclick="gitCheckout(\'' + jsStr(wsId) + '\',\'' + jsStr(proj.id) + '\',\'' + jsStr(b) + '\')">Switch</button>';
+          html += '<button class="btn btn-sm" onclick="gitCheckout(\'' + jsStr(wsId) + '\',\'' + jsStr(proj.id) + '\',\'' + jsStr(b) + '\')">Switch</button>';
+        } else {
+          html += '<span class="badge badge-success">current</span>';
         }
         html += '</div>';
       }
+    } else {
+      html += '<p>No branches found.</p>';
     }
     html += '</div>';
 
-    html += '<div id="git-output"></div>';
-    main.innerHTML = html;
+    // Git output area
+    html += '<div id="git-output" class="git-output"></div>';
+    html += '<div style="height:var(--space-4)"></div>';
+
+    transitionTo(html);
   }
 
   window.gitDiff = function (wsId, projId) {
-    api('/api/git/' + wsId + '/diff?projectId=' + projId).then((r) => {
-      const out = document.getElementById('git-output');
+    haptic('medium');
+    api('/api/git/' + wsId + '/diff?projectId=' + projId).then(function (r) {
+      var out = document.getElementById('git-output');
       if (!out) return;
-      out.innerHTML = '<div class="card"><h3>Diff</h3><pre style="font-size:12px;overflow-x:auto;white-space:pre-wrap;background:#0d1117;padding:12px;border-radius:6px;border:1px solid #30363d;">' + esc(r.diff || '(no changes)') + '</pre></div>';
-    }).catch((e) => { showError(e.message); });
+      out.innerHTML = '<div class="card anim-fade-in"><h3>Diff Output</h3><pre>' + esc(r.diff || '(no changes)') + '</pre></div>';
+    }).catch(function (e) {
+      showToast(e.message, 'error');
+    });
   };
 
   window.gitStatus = function (wsId, projId) {
-    api('/api/git/' + wsId + '/status?projectId=' + projId).then((r) => {
-      const out = document.getElementById('git-output');
+    haptic('medium');
+    api('/api/git/' + wsId + '/status?projectId=' + projId).then(function (r) {
+      var out = document.getElementById('git-output');
       if (!out) return;
-      let html = '<div class="card"><h3>Status</h3>';
-      html += '<div class="card-row"><span class="label">Branch</span><span class="value">' + esc(r.branch) + '</span></div>';
-      html += '<div class="card-row"><span class="label">Clean</span><span class="value">' + (r.clean ? 'Yes' : 'No') + '</span></div>';
-      if (r.files?.length) html += '<div class="card-row"><span class="label">Files</span><span class="value">' + esc(r.files.join('\n')) + '</span></div>';
-      html += '</div>';
+      var html = '<div class="card anim-fade-in"><h3>Status</h3>'
+        + '<div class="card-section">'
+        + '<div class="card-row"><span class="label">Branch</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(r.branch) + '</span></div>'
+        + '<div class="card-row"><span class="label">Clean</span><span class="value">' + (r.clean ? '<span class="badge badge-success">Yes</span>' : '<span class="badge badge-danger">No</span>') + '</span></div>';
+      if (r.files && r.files.length) {
+        html += '<div class="card-row"><span class="label">Files</span><span class="value" style="font-family:var(--font-mono);font-size:12px">' + esc(r.files.join('\n')) + '</span></div>';
+      }
+      html += '</div></div>';
       out.innerHTML = html;
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      showToast(e.message, 'error');
+    });
   };
 
   window.showCommitModal = function (wsId, projId) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = '<div class="modal"><h3>Commit Changes</h3>'
-      + '<div class="form-group"><label>Message</label><input type="text" id="commit-msg" placeholder="Describe your changes"></div>'
-      + '<div class="actions"><button class="btn" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
-      + '<button class="btn primary" onclick="gitCommit(\'' + wsId + '\',\'' + projId + '\',this)">Commit</button></div></div>';
-    document.body.appendChild(overlay);
-    setTimeout(() => document.getElementById('commit-msg')?.focus(), 100);
+    haptic('medium');
+    var bodyHtml = ''
+      + '<div class="form-group">'
+      + '  <label class="form-label">Commit Message</label>'
+      + '  <input type="text" class="form-input" id="commit-msg" placeholder="Describe your changes" autocomplete="off">'
+      + '  <div class="form-error">Message is required</div>'
+      + '</div>'
+      + '<button class="btn btn-primary btn-block mt-3" onclick="gitCommit(\'' + wsId + '\',\'' + projId + '\',this)">Commit Changes</button>';
+
+    openSheet('Commit Changes', bodyHtml);
+
+    setTimeout(function () {
+      var inp = document.getElementById('commit-msg');
+      if (inp) inp.focus();
+    }, 400);
   };
 
   window.gitCommit = function (wsId, projId, btn) {
-    const msg = document.getElementById('commit-msg').value;
-    if (!msg) return;
-    btn.textContent = 'Committing...';
+    var msg = document.getElementById('commit-msg').value.trim();
+    if (!msg) {
+      document.getElementById('commit-msg').classList.add('error');
+      showToast('Please enter a commit message', 'warning');
+      return;
+    }
+    document.getElementById('commit-msg').classList.remove('error');
+
+    haptic('medium');
+    btn.disabled = true;
+    btn.textContent = 'Committing\u2026';
+
     api('/api/git/' + wsId + '/commit', {
       method: 'POST',
       body: JSON.stringify({ message: msg, projectId: projId }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then((r) => {
-      btn.closest('.modal-overlay').remove();
-      const out = document.getElementById('git-output');
-      if (out) out.innerHTML = '<div class="success">Committed: ' + esc(r.sha || '') + '</div>';
-    }).catch((e) => { showError(e.message); });
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function (r) {
+      closeSheet();
+      showToast('Committed: ' + esc(r.sha ? r.sha.slice(0, 7) : ''), 'success');
+      var out = document.getElementById('git-output');
+      if (out) {
+        out.innerHTML = '<div class="status-msg status-success anim-fade-in"><span class="status-msg-icon">&#10003;</span><span>Committed: <code>' + esc(r.sha || '') + '</code></span></div>';
+      }
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'Commit Changes';
+      showToast(e.message, 'error');
+    });
   };
 
   window.gitAction = function (wsId, projId, action) {
+    haptic('medium');
     api('/api/git/' + wsId + '/' + action, {
       method: 'POST',
       body: JSON.stringify({ projectId: projId }),
-      headers: { 'Content-Type': 'application/json', ...headers },
-    }).then((r) => {
-      const out = document.getElementById('git-output');
-      if (out) out.innerHTML = '<div class="success">' + esc(action) + ' completed</div>';
-    }).catch((e) => { showError(e.message); });
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function (r) {
+      showToast(action.charAt(0).toUpperCase() + action.slice(1) + ' completed', 'success');
+      var out = document.getElementById('git-output');
+      if (out) {
+        out.innerHTML = '<div class="status-msg status-success anim-fade-in"><span class="status-msg-icon">&#10003;</span><span>' + action.charAt(0).toUpperCase() + action.slice(1) + ' completed successfully</span></div>';
+      }
+    }).catch(function (e) {
+      showToast(e.message, 'error');
+    });
   };
 
   window.gitLog = function (wsId, projId) {
-    api('/api/git/' + wsId + '/log?projectId=' + projId + '&limit=10').then((r) => {
-      const out = document.getElementById('git-output');
+    haptic('medium');
+    api('/api/git/' + wsId + '/log?projectId=' + projId + '&limit=10').then(function (r) {
+      var out = document.getElementById('git-output');
       if (!out) return;
-      let html = '<div class="card"><h3>Recent Commits</h3>';
-      if (r.commits?.length) {
-        for (const c of r.commits) {
-          html += '<div class="card-row"><span class="value"><code>' + esc(c.sha?.slice(0, 7)) + '</code> ' + esc(c.message?.split('\n')[0]) + ' <span style="color:#8b949e">by ' + esc(c.author || '') + '</span></span></div>';
+      var html = '<div class="card anim-fade-in"><h3>Recent Commits</h3>';
+      if (r.commits && r.commits.length) {
+        for (var ci = 0; ci < r.commits.length; ci++) {
+          var c = r.commits[ci];
+          html += '<div class="card-row">'
+            + '<span class="value" style="font-size:13px">'
+            + '<code>' + esc(c.sha ? c.sha.slice(0, 7) : '') + '</code> '
+            + esc((c.message || '').split('\n')[0])
+            + ' <span style="color:var(--tg-hint);font-size:12px">by ' + esc(c.author || '') + '</span>'
+            + '</span>'
+            + '</div>';
         }
       } else {
-        html += '<p>No commits.</p>';
+        html += '<p>No commits yet.</p>';
       }
       html += '</div>';
       out.innerHTML = html;
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      showToast(e.message, 'error');
+    });
   };
 
   window.gitCheckout = function (wsId, projId, branch) {
     showConfirm('Switch to "' + branch + '"?', function () {
+      showLoading('detail');
       api('/api/git/' + wsId + '/checkout', {
         method: 'POST',
-        body: JSON.stringify({ branch, projectId: projId, onDirty: 'stash' }),
-        headers: { 'Content-Type': 'application/json', ...headers },
-      }).then((r) => {
-        const out = document.getElementById('git-output');
-        if (out) out.innerHTML = '<div class="success">Switched to ' + esc(r.branch) + '</div>';
+        body: JSON.stringify({ branch: branch, projectId: projId, onDirty: 'stash' }),
+        headers: { 'Content-Type': 'application/json' },
+      }).then(function (r) {
+        showToast('Switched to ' + esc(r.branch || branch), 'success');
         renderProjectDetail(projId);
-      }).catch((e) => { showError(e.message); });
+      }).catch(function (e) {
+        showError(e.message);
+      });
     });
   };
 
-  // ─── Terminal ────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 15. Terminal / Session
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderTerminal(sessionId) {
-    const host = window.location.host;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var host = window.location.host;
+    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    let html = '<div class="actions"><button class="btn" onclick="disconnectTerminal();location.hash=\'#dashboard\'">&#8592; Back</button></div>';
-    html += '<div class="card" id="terminal-card"><h3>Session Terminal</h3>';
-    html += '<div id="terminal-container"></div>';
-    html += '<div class="terminal-controls" id="terminal-controls">';
-    html += '<button class="btn" onclick="terminalKey(\'tab\')">Tab</button>';
-    html += '<button class="btn" onclick="terminalKey(\'enter\')">Enter</button>';
-    html += '<button class="btn" onclick="terminalKey(\'up\')">&#8593;</button>';
-    html += '<button class="btn" onclick="terminalKey(\'down\')">&#8595;</button>';
-    html += '<button class="btn danger" onclick="terminalKey(\'ctrl+c\')">Ctrl+C</button>';
-    html += '</div></div>';
-    html += '<div id="terminal-status"></div>';
+    var html = '<div class="ws-detail-header anim-slide-up">'
+      + '<button class="btn btn-ghost btn-sm" onclick="disconnectTerminal();location.hash=\'#dashboard\'" aria-label="Back">'
+      + '  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+      + '</button>'
+      + '<h1>Session Terminal</h1>'
+      + '<div class="terminal-info" style="margin-left:auto">'
+      + '  <span id="terminal-status-badge"><span class="badge badge-neutral">Connecting...</span></span>'
+      + '</div>'
+      + '</div>';
 
-    main.innerHTML = html;
+    html += '<div class="card" style="padding:0;overflow:hidden">'
+      + '<div id="terminal-container" style="height:400px;width:100%"></div>'
+      + '</div>';
 
+    html += '<div class="terminal-keys" style="margin-bottom:var(--space-4)">'
+      + '<button class="btn btn-sm" onclick="terminalKey(\'tab\')">Tab</button>'
+      + '<button class="btn btn-sm" onclick="terminalKey(\'enter\')">Enter</button>'
+      + '<button class="btn btn-sm" onclick="terminalKey(\'up\')">&#8593; Up</button>'
+      + '<button class="btn btn-sm" onclick="terminalKey(\'down\')">&#8595; Down</button>'
+      + '<button class="btn btn-sm btn-danger" onclick="terminalKey(\'ctrl+c\')">Ctrl+C</button>'
+      + '<button class="btn btn-sm btn-danger" onclick="cancelSession(\'' + jsStr(sessionId) + '\',this)" style="margin-left:auto">&#10005; End Session</button>'
+      + '</div>';
+
+    html += '<div id="terminal-status" style="margin-bottom:var(--space-4)"></div>';
+    html += '<div style="height:var(--space-4)"></div>';
+
+    transitionTo(html, function () {
+
+    // Initialize terminal
     try {
-      const term = new Terminal({
+      var term = new Terminal({
         cursorBlink: true,
         cursorStyle: 'block',
         fontSize: 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-        theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff' },
+        theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: '#58a6ff', selection: 'rgba(88,166,255,0.3)' },
         cols: 80,
         rows: 24,
+        allowTransparency: false,
       });
       activeTerminal = term;
       term.open(document.getElementById('terminal-container'));
 
+      haptic('medium');
+
       term.onData(function (data) {
         if (activeSocket && activeSocket.connected) {
-          activeSocket.emit('terminal:input', { data });
+          activeSocket.emit('terminal:input', { data: data });
         }
       });
 
-      const socketUrl = protocol + '//' + host + '/gateway';
-      const socket = io(socketUrl, {
+      // Update closing confirmation
+      if (tg) tg.enableClosingConfirmation();
+
+      var socketUrl = protocol + '//' + host + '/gateway';
+      var socket = io(socketUrl, {
         query: { initData: tgInitData, session: sessionId },
         transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 2000,
       });
       activeSocket = socket;
 
       socket.on('connect', function () {
-        document.getElementById('terminal-status').innerHTML = '<div class="success">Connected</div>';
+        var badge = document.getElementById('terminal-status-badge');
+        if (badge) badge.innerHTML = '<span class="badge badge-success">Connected</span>';
+        var st = document.getElementById('terminal-status');
+        if (st) st.innerHTML = '<div class="status-msg status-success anim-fade-in"><span class="status-msg-icon">&#10003;</span><span>Session connected</span></div>';
       });
 
       socket.on('terminal:data', function (data) {
@@ -559,124 +1135,225 @@
       });
 
       socket.on('terminal:exit', function (data) {
-        document.getElementById('terminal-status').innerHTML = '<div class="card-row"><span class="label">Session ended</span><span class="value">Exit code: ' + (data.code ?? '—') + ' (' + Math.round((data.durationMs || 0) / 1000) + 's)</span></div>';
-        document.getElementById('terminal-controls').innerHTML = '<button class="btn" onclick="location.hash=\'#dashboard\'">&#8592; Back</button>';
+        var statusEl = document.getElementById('terminal-status');
+        if (statusEl) {
+          statusEl.innerHTML = '<div class="card" style="padding:var(--space-4)">'
+            + '<div class="card-row">'
+            + '<span class="label">Session Ended</span>'
+            + '<span class="value">Exit code: ' + (data.code !== undefined && data.code !== null ? data.code : '\u2014') + ' \u00B7 ' + Math.round((data.durationMs || 0) / 1000) + 's</span>'
+            + '</div>'
+            + '<button class="btn btn-primary btn-block mt-3" onclick="location.hash=\'#dashboard\'">Back to Dashboard</button>'
+            + '</div>';
+        }
+        var controls = document.querySelector('.terminal-keys');
+        if (controls) controls.style.display = 'none';
+        var badge = document.getElementById('terminal-status-badge');
+        if (badge) badge.innerHTML = '<span class="badge badge-neutral">Ended</span>';
+
+        if (tg) tg.disableClosingConfirmation();
       });
 
       socket.on('error', function (err) {
-        document.getElementById('terminal-status').innerHTML = '<div class="error">' + esc(typeof err === 'string' ? err : err.message || 'Connection error') + '</div>';
+        var badge = document.getElementById('terminal-status-badge');
+        if (badge) badge.innerHTML = '<span class="badge badge-danger">Error</span>';
+        var st = document.getElementById('terminal-status');
+        if (st) st.innerHTML = '<div class="status-msg status-error anim-fade-in"><span class="status-msg-icon">&#10007;</span><span>' + esc(typeof err === 'string' ? err : (err.message || 'Connection error')) + '</span></div>';
       });
 
       socket.on('disconnect', function () {
-        document.getElementById('terminal-status').innerHTML = '<div class="error">Disconnected</div>';
+        var badge = document.getElementById('terminal-status-badge');
+        if (badge) {
+          var wasConnected = badge.querySelector('.badge-success');
+          if (wasConnected) {
+            badge.innerHTML = '<span class="badge badge-warning">Reconnecting...</span>';
+          }
+        }
+        var st = document.getElementById('terminal-status');
+        if (st) {
+          st.innerHTML = '<div class="status-msg status-warning anim-fade-in"><span class="status-msg-icon">&#9888;</span><span>Connection lost. Reconnecting...</span></div>';
+        }
       });
+
+      socket.on('reconnect', function () {
+        var badge = document.getElementById('terminal-status-badge');
+        if (badge) badge.innerHTML = '<span class="badge badge-success">Connected</span>';
+        var st = document.getElementById('terminal-status');
+        if (st) st.innerHTML = '<div class="status-msg status-success anim-fade-in"><span class="status-msg-icon">&#10003;</span><span>Reconnected</span></div>';
+      });
+
     } catch (e) {
-      document.getElementById('terminal-container').innerHTML = '<div class="error">Failed to initialize terminal: ' + esc(e.message) + '</div>';
+      var tc = document.getElementById('terminal-container');
+      if (tc) tc.innerHTML = '<div class="status-msg status-error anim-fade-in" style="margin:var(--space-4)"><span class="status-msg-icon">&#10007;</span><span>Failed to initialize terminal: ' + esc(e.message) + '</span></div>';
     }
+    });
   }
 
   window.disconnectTerminal = function () {
-    if (activeSocket) { activeSocket.disconnect(); activeSocket = null; }
+    if (activeSocket) { try { activeSocket.disconnect(); } catch (e) { /* ignore */ } activeSocket = null; }
     if (activeTerminal) { try { activeTerminal.dispose(); } catch (e) { /* ignore */ } activeTerminal = null; }
+    if (tg) tg.disableClosingConfirmation();
   };
 
   window.terminalKey = function (key) {
+    haptic('light');
     if (activeSocket && activeSocket.connected) {
       activeSocket.emit('terminal:input', { type: 'key', data: key });
     }
   };
 
-  // ─── Git Operations ──────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 16. Git Operations Page
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderGitOps(wsId) {
-    showLoading();
-    api('/api/git/' + wsId + '/credentials').then((status) => {
-      let html = '<h1>Git Operations</h1>';
-      html += '<div class="actions"><button class="btn" onclick="location.hash=\'#workspace/' + wsId + '\'">&#8592; Back</button></div>';
+    showLoading('detail');
+    api('/api/git/' + wsId + '/credentials').then(function (status) {
+      var html = '<div class="ws-detail-header anim-slide-up">'
+        + '<button class="btn btn-ghost btn-sm" onclick="location.hash=\'#workspace/' + wsId + '\'" aria-label="Back">'
+        + '  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+        + '</button>'
+        + '<h1>Git Operations</h1>'
+        + '</div>';
 
-      html += '<div class="card"><h3>Credentials</h3>';
+      // Credentials Card
+      html += '<div class="card anim-slide-up" style="animation-delay:0.05s">'
+        + '<h3>Credentials</h3>';
+
       if (status.isSet) {
-        html += '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge badge-green">Logged In</span></span></div>';
-        html += '<div class="card-row"><span class="label">Username</span><span class="value">' + esc(status.username || '') + '</span></div>';
-        html += '<div class="card-row"><span class="label">Token</span><span class="value">' + esc(status.tokenMasked || '') + '</span></div>';
-        html += '<div class="actions">';
-        html += '<button class="btn" onclick="testGitCredentials(\'' + wsId + '\')">Test</button>';
-        html += '<button class="btn danger" onclick="logoutGit(\'' + wsId + '\')">Logout</button>';
-        html += '</div>';
+        html += '<div class="card-section">'
+          + '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge badge-success">Logged In</span></span></div>'
+          + '<div class="card-row"><span class="label">Username</span><span class="value">' + esc(status.username || '') + '</span></div>'
+          + '<div class="card-row"><span class="label">Token</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(status.tokenMasked || '') + '</span></div>'
+          + '</div>'
+          + '<div class="btn-group">'
+          + '<button class="btn" onclick="testGitCredentials(\'' + wsId + '\')">Test</button>'
+          + '<button class="btn btn-danger" onclick="logoutGit(\'' + wsId + '\')">Logout</button>'
+          + '</div>';
       } else {
-        html += '<p>Not configured.</p>';
-        html += '<div class="form-group mt-8"><label>Username</label><input type="text" id="git-user" placeholder="Git username"></div>';
-        html += '<div class="form-group"><label>Token</label><input type="password" id="git-token" placeholder="Personal access token"></div>';
-        html += '<div class="form-group"><label>Remote URL</label><input type="text" id="git-url" placeholder="https://github.com/org/repo.git"></div>';
-        html += '<button class="btn primary" onclick="saveGitCredentials(\'' + wsId + '\')">Save &amp; Validate</button>';
+        html += '<p>Not configured. Add Git credentials to enable version control in your workspace.</p>'
+          + '<div class="form-group mt-3"><label class="form-label">Username</label><input type="text" class="form-input" id="git-user" placeholder="Git username"></div>'
+          + '<div class="form-group"><label class="form-label">Token</label><input type="password" class="form-input" id="git-token" placeholder="Personal access token"></div>'
+          + '<div class="form-group"><label class="form-label">Remote URL</label><input type="text" class="form-input" id="git-url" placeholder="https://github.com/org/repo.git"></div>'
+          + '<button class="btn btn-primary btn-block" onclick="saveGitCredentials(\'' + wsId + '\')">Save &amp; Validate</button>';
       }
       html += '</div>';
 
-      html += '<div class="card"><h3>Git Commands</h3>';
-      html += '<p>Navigate to a project to run git commands.</p>';
-      html += '<div class="actions">';
-      html += '<button class="btn" onclick="location.hash=\'#workspace/' + wsId + '\'">View Projects</button>';
-      html += '</div></div>';
+      // Git Commands Card
+      html += '<div class="card anim-slide-up" style="animation-delay:0.1s">'
+        + '<h3>Git Commands</h3>'
+        + '<p>Navigate to a project to run git commands like diff, commit, push, and pull.</p>'
+        + '<button class="btn btn-primary btn-block" onclick="location.hash=\'#workspace/' + wsId + '\'">View Projects</button>'
+        + '</div>';
 
-      html += '<div id="git-output"></div>';
-      main.innerHTML = html;
-    }).catch((e) => { showError(e.message); });
+      html += '<div id="git-output" class="git-output"></div>';
+      html += '<div style="height:var(--space-4)"></div>';
+
+      transitionTo(html);
+    }).catch(function (e) {
+      showError(e.message);
+    });
   }
 
   window.testGitCredentials = function (wsId) {
-    const out = document.getElementById('git-output');
-    if (out) out.innerHTML = '<div class="loading">Testing...</div>';
-    api('/api/git/' + wsId + '/credentials', { method: 'GET' }).then((status) => {
+    haptic('medium');
+    var out = document.getElementById('git-output');
+    if (out) out.innerHTML = '<div class="status-msg status-info anim-fade-in"><span class="status-msg-icon">&#9432;</span><span>Testing credentials...</span></div>';
+    api('/api/git/' + wsId + '/credentials', { method: 'GET' }).then(function (status) {
       if (out) {
         if (status.isSet) {
-          out.innerHTML = '<div class="success">Credentials are set for ' + esc(status.username || '') + '</div>';
+          out.innerHTML = '<div class="status-msg status-success anim-fade-in"><span class="status-msg-icon">&#10003;</span><span>Credentials are set for <strong>' + esc(status.username || '') + '</strong></span></div>';
         } else {
-          out.innerHTML = '<div class="error">No credentials set</div>';
+          out.innerHTML = '<div class="status-msg status-error anim-fade-in"><span class="status-msg-icon">&#10007;</span><span>No credentials set</span></div>';
         }
       }
-    }).catch((e) => {
-      if (out) out.innerHTML = '<div class="error">' + esc(e.message) + '</div>';
+    }).catch(function (e) {
+      if (out) out.innerHTML = '<div class="status-msg status-error anim-fade-in"><span class="status-msg-icon">&#10007;</span><span>' + esc(e.message) + '</span></div>';
     });
   };
 
-  // ─── Session List ────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 17. Session List
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function renderSessionList() {
-    showLoading();
-    api('/api/sessions').then((sessions) => {
+    showLoading('list');
+    api('/api/sessions').then(function (sessions) {
       if (!Array.isArray(sessions)) sessions = [];
-      let html = '<h1>Sessions</h1><div class="card">';
+
+      var html = '<h1 class="anim-slide-up">Sessions</h1>'
+        + '<div class="card">';
+
       if (sessions.length === 0) {
-        html += '<p>No sessions. Start one from the Dashboard.</p>';
+        html += '<div class="empty-state">'
+          + '<div class="empty-state-icon">&#128195;</div>'
+          + '<div class="empty-state-title">No Sessions Yet</div>'
+          + '<div class="empty-state-desc">Start a coding session from the Dashboard.</div>'
+          + '<button class="btn btn-primary" onclick="location.hash=\'#dashboard\'">Go to Dashboard</button>'
+          + '</div>';
       } else {
-        for (const s of sessions) {
-          html += '<div class="session-item">';
-          html += '<div class="info"><div class="id">' + esc(s.publicId || s.id) + ' <span class="badge ' + (s.running ? 'badge-green' : 'badge-red') + '">' + (s.running ? 'Running' : 'Stopped') + '</span></div>';
-          html += '<div class="prompt">' + esc((s.prompt || '').slice(0, 80)) + '</div>';
-          html += '<div style="font-size:11px;color:#8b949e">' + esc(s.workspaceName || '') + '</div></div>';
-          html += '<div class="actions" style="flex:0 0 auto">';
-          if (s.running) html += '<button class="btn" onclick="location.hash=\'#session/' + jsStr(s.id) + '\'">&#9000; Terminal</button>';
-          html += '<button class="btn danger" onclick="cancelSession(\'' + jsStr(s.id) + '\',this)">&#10005;</button>';
-          html += '</div></div>';
+        for (var i = 0; i < sessions.length; i++) {
+          var s = sessions[i];
+          html += '<div class="list-item">'
+            + '<div class="info">'
+            + '<div class="primary">'
+            + '<span style="font-family:var(--font-mono);font-size:13px">' + esc(s.publicId || s.id) + '</span> '
+            + (s.running ? '<span class="badge badge-success">Running</span>' : '<span class="badge badge-neutral">Stopped</span>')
+            + '</div>'
+            + '<div class="secondary">' + esc((s.prompt || '').slice(0, 80)) + '</div>'
+            + '<div class="session-status">' + esc(s.workspaceName || '') + '</div>'
+            + '</div>'
+            + '<div class="session-actions">';
+          if (s.running) {
+            html += '<button class="btn btn-sm" onclick="location.hash=\'#session/' + jsStr(s.id) + '\'">&#9000;</button>';
+          }
+          html += '<button class="btn btn-sm btn-danger" onclick="cancelSession(\'' + jsStr(s.id) + '\',this)">&#10005;</button>'
+            + '</div>'
+            + '</div>';
         }
       }
+
       html += '</div>';
-      main.innerHTML = html;
-    }).catch((e) => { showError(e.message); });
+      html += '<div style="height:var(--space-4)"></div>';
+      transitionTo(html);
+    }).catch(function (e) {
+      showError(e.message);
+    });
   }
 
   window.cancelSession = function (id, btn) {
-    btn.textContent = '...';
-    api('/api/sessions/' + id + '/cancel', { method: 'POST' }).then(() => {
+    haptic('medium');
+    btn.disabled = true;
+    btn.innerHTML = '...';
+    api('/api/sessions/' + id + '/cancel', { method: 'POST' }).then(function () {
+      showToast('Session cancelled', 'info');
       renderSessionList();
-    }).catch((e) => { showError(e.message); });
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.innerHTML = '&#10005;';
+      showToast(e.message, 'error');
+    });
   };
 
-  // ─── Init ────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 18. Reusable UI Helpers
+  // ═══════════════════════════════════════════════════════════════════════════
 
+  function renderBadge(text, type) {
+    if (!text) return '';
+    type = type || 'neutral';
+    return '<span class="badge badge-' + type + '">' + esc(text) + '</span>';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 19. Init
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Initial render
   renderRoute();
 
+  // If there's an active session from initial state, navigate to it
   if (state.session) {
     navigate('#session/' + state.session);
   }
+
 })();
