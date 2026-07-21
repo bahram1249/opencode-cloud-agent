@@ -496,6 +496,10 @@
       if (!Array.isArray(workspaces)) workspaces = [];
 
       var html = '<h1 class="anim-slide-up">Workspaces</h1>'
+        + '<button class="btn btn-primary btn-block mb-4 anim-slide-up" style="animation-delay:0.05s" onclick="showCreateWorkspaceModal()">'
+        + '  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
+        + '  New Workspace'
+        + '</button>'
         + '<div class="card">';
 
       if (workspaces.length === 0) {
@@ -530,7 +534,64 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 13. Workspace Settings
+  // 13. Create Workspace
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  window.showCreateWorkspaceModal = function () {
+    haptic('medium');
+    var bodyHtml = ''
+      + '<div class="form-group">'
+      + '  <label class="form-label">Workspace Name</label>'
+      + '  <input type="text" class="form-input" id="ws-name" placeholder="e.g. my-project" autocomplete="off">'
+      + '  <div class="form-error">Name is required</div>'
+      + '</div>'
+      + '<div class="form-group">'
+      + '  <label class="form-label">Work Directory (optional)</label>'
+      + '  <input type="text" class="form-input" id="ws-workdir" placeholder="e.g. /home/user/projects" autocomplete="off">'
+      + '  <div class="form-hint">Leave empty to use the default workspace directory.</div>'
+      + '</div>'
+      + '<button class="btn btn-primary btn-block mt-4" onclick="createWorkspace(this)">Create Workspace</button>';
+
+    openSheet('New Workspace', bodyHtml);
+
+    setTimeout(function () {
+      var inp = document.getElementById('ws-name');
+      if (inp) inp.focus();
+    }, 400);
+  };
+
+  window.createWorkspace = function (btn) {
+    var name = document.getElementById('ws-name').value.trim();
+    var workDir = document.getElementById('ws-workdir').value.trim() || undefined;
+
+    if (!name) {
+      document.getElementById('ws-name').classList.add('error');
+      showToast('Workspace name is required', 'warning');
+      return;
+    }
+    document.getElementById('ws-name').classList.remove('error');
+
+    haptic('medium');
+    btn.disabled = true;
+    btn.textContent = 'Creating\u2026';
+
+    api('/api/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: name, workDir: workDir }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function (ws) {
+      closeSheet();
+      showToast('Workspace "' + esc(name) + '" created', 'success');
+      navigate('#workspace/' + ws.id);
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'Create Workspace';
+      showToast(e.message, 'error');
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 14. Workspace Settings
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderWorkspaceSettings(id) {
@@ -617,6 +678,13 @@
       }
       html += '</div>';
 
+      // Delete Workspace
+      html += '<div class="card anim-slide-up" style="animation-delay:0.2s">'
+        + '<h3 style="color:var(--tg-danger)">Danger Zone</h3>'
+        + '<p>Delete this workspace and all its associated data. This action cannot be undone.</p>'
+        + '<button class="btn btn-danger btn-block" onclick="deleteWorkspace(\'' + id + '\',\'' + esc(ws.name) + '\')">Delete Workspace</button>'
+        + '</div>';
+
       html += '<div style="height:var(--space-4)"></div>';
       transitionTo(html, function () {
         if (ws.providerId) {
@@ -627,6 +695,19 @@
       showError(e.message);
     });
   }
+
+  window.deleteWorkspace = function (id, name) {
+    showConfirm('Delete workspace "' + name + '"? All projects and data will be permanently removed.', function () {
+      haptic('medium');
+      showLoading('detail');
+      api('/api/workspaces/' + id, { method: 'DELETE' }).then(function () {
+        showToast('Workspace "' + esc(name) + '" deleted', 'success');
+        navigate('#workspaces');
+      }).catch(function (e) {
+        showError(e.message);
+      });
+    });
+  };
 
   window.onProviderChange = function () {
     var group = document.getElementById('apikey-group');
@@ -818,7 +899,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 14. Project Detail
+  // 15. Project Detail
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderProjectDetail(id) {
@@ -1052,7 +1133,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 15. Terminal / Session
+  // 16. Terminal / Session
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderTerminal(sessionId) {
@@ -1202,7 +1283,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 16. Git Operations Page
+  // 17. Git Operations Page
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderGitOps(wsId) {
@@ -1272,7 +1353,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 17. Session List
+  // 18. Session List
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderSessionList() {
@@ -1335,7 +1416,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 18. Reusable UI Helpers
+  // 19. Reusable UI Helpers
   // ═══════════════════════════════════════════════════════════════════════════
 
   function renderBadge(text, type) {
@@ -1345,7 +1426,7 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 19. Init
+  // 20. Init
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Initial render

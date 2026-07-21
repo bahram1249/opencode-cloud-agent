@@ -18,6 +18,12 @@ export class WorkspacesController {
     return this.workspaceService.findAll(String(userId));
   }
 
+  @Get('active')
+  @ApiOperation({ summary: 'Get the active workspace' })
+  async getActive(@InitDataUser('id') userId: number) {
+    return this.workspaceService.getActive(String(userId));
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get workspace details' })
   async findOne(@Param('id') id: string, @InitDataUser('id') userId: number) {
