@@ -18,13 +18,47 @@ export interface GitLogResult {
   commits: Array<{ sha: string; message: string; author: string; date: string }>;
 }
 
+export interface GitAuthEnv {
+  GIT_USERNAME?: string;
+  GIT_TOKEN?: string;
+  GITHUB_TOKEN?: string;
+  GITHUB_USER?: string;
+}
+
+function embedAuth(url: string, username: string, token: string): string {
+  return url.replace(/^https?:\/\//, `https://${encodeURIComponent(username)}:${encodeURIComponent(token)}@`);
+}
+
 @Injectable()
 export class GitCommandsService {
   private readonly logger = new Logger(GitCommandsService.name);
 
-  async clone(cwd: string, remoteUrl: string, targetPath: string, containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
-    const args = targetPath === '.' ? ['clone', remoteUrl, '.'] : ['clone', remoteUrl, targetPath];
-    return this.git(cwd, args, containerId, credentials);
+  async clone(cwd: string, remoteUrl: string, targetPath: string, containerId?: string, credentials?: GitAuthEnv): Promise<string> {
+    const token = credentials?.GIT_TOKEN ?? credentials?.GITHUB_TOKEN;
+    const user = credentials?.GIT_USERNAME ?? credentials?.GITHUB_USER;
+    let url = remoteUrl;
+
+    if (containerId && token && user) {
+      // Validate credentials against the remote URL before cloning
+      const authUrl = embedAuth(remoteUrl, user, token);
+      try {
+        await this.git(cwd, ['ls-remote', authUrl], containerId);
+      } catch {
+        throw new Error(
+          `Git credentials rejected for ${remoteUrl}\n\n` +
+          `  Username: ${user}\n` +
+          `  Token: ${token.slice(0, 4)}****${token.slice(-4)}\n\n` +
+          `Possible issues:\n` +
+          `  • Token is expired or revoked — generate a new one at https://github.com/settings/tokens\n` +
+          `  • Token lacks access to this repository (add "repo" scope)\n` +
+          `  • Repository does not exist or you don't have access\n\n` +
+          `Fix: /git login ${user} <new-token>`,
+        );
+      }
+      url = authUrl;
+    }
+    const args: string[] = targetPath === '.' ? ['clone', url, '.'] : ['clone', url, targetPath];
+    return this.git(cwd, args, containerId);
   }
 
   async branch(cwd: string, containerId?: string): Promise<{ current: string; branches: string[] }> {
@@ -88,14 +122,32 @@ export class GitCommandsService {
     return { sha, message };
   }
 
-  async push(cwd: string, branch?: string, remote = 'origin', containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
+  async push(cwd: string, branch?: string, remote = 'origin', containerId?: string, credentials?: GitAuthEnv): Promise<string> {
     const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
-    return this.git(cwd, ['push', '-u', remote, b], containerId, credentials);
+    if (containerId && credentials) {
+      const token = credentials.GIT_TOKEN || credentials.GITHUB_TOKEN;
+      const user = credentials.GIT_USERNAME || credentials.GITHUB_USER;
+      if (token && user) {
+        const remoteUrl = (await this.git(cwd, ['remote', 'get-url', remote], containerId)).trim();
+        const authUrl = embedAuth(remoteUrl, user, token);
+        return this.git(cwd, ['push', '-u', authUrl, b], containerId);
+      }
+    }
+    return this.git(cwd, ['push', '-u', remote, b], containerId);
   }
 
-  async pull(cwd: string, remote = 'origin', branch?: string, containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
+  async pull(cwd: string, remote = 'origin', branch?: string, containerId?: string, credentials?: GitAuthEnv): Promise<string> {
     const b = branch ?? (await this.git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], containerId)).trim();
-    return this.git(cwd, ['pull', remote, b], containerId, credentials);
+    if (containerId && credentials) {
+      const token = credentials.GIT_TOKEN || credentials.GITHUB_TOKEN;
+      const user = credentials.GIT_USERNAME || credentials.GITHUB_USER;
+      if (token && user) {
+        const remoteUrl = (await this.git(cwd, ['remote', 'get-url', remote], containerId)).trim();
+        const authUrl = embedAuth(remoteUrl, user, token);
+        return this.git(cwd, ['pull', authUrl, b], containerId);
+      }
+    }
+    return this.git(cwd, ['pull', remote, b], containerId);
   }
 
   async log(cwd: string, maxCount = 10, containerId?: string): Promise<GitLogResult> {
@@ -132,22 +184,11 @@ export class GitCommandsService {
     }
   }
 
-  private buildGitShCommand(args: string[], credentials: { username: string; token: string }): { command: string; args: string[] } {
-    const esc = (s: string) => s.replace(/'/g, "'\\''");
-    const gitCmd = `git ${args.map(a => `'${esc(a)}'`).join(' ')}`;
-    const helper = `git config --global credential.helper "!f() { echo username='${esc(credentials.username)}'; echo password='${esc(credentials.token)}'; }; f"`;
-    return { command: 'sh', args: ['-c', `${helper} && ${gitCmd}`] };
-  }
-
-  private async git(cwd: string, args: string[], containerId?: string, credentials?: { username: string; token: string }): Promise<string> {
+  private async git(cwd: string, args: string[], containerId?: string): Promise<string> {
     try {
       if (containerId) {
-        if (credentials) {
-          const wrapped = this.buildGitShCommand(args, credentials);
-          const env = { GIT_USERNAME: credentials.username, GIT_TOKEN: credentials.token, GIT_TERMINAL_PROMPT: '0' };
-          return await this.execInContainer(containerId, cwd, wrapped.command, wrapped.args, env);
-        }
-        return await this.execInContainer(containerId, cwd, 'git', args);
+        const env = { GIT_TERMINAL_PROMPT: '0' };
+        return await this.execInContainer(containerId, cwd, 'git', args, env);
       }
       const { stdout } = await execFileAsync('git', args, {
         cwd,

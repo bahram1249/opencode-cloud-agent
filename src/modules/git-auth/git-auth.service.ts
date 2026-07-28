@@ -14,6 +14,9 @@ export interface GitCredentialStatus {
   remoteUrl: string | null;
   isSet: boolean;
   lastVerifiedAt: Date | null;
+  providerId: string | null;
+  providerKeySet: boolean;
+  providerKeyMasked: string | null;
 }
 
 export interface GitValidationResult {
@@ -106,12 +109,18 @@ export class GitAuthService {
         name: true,
         gitToken: true,
         gitUsername: true,
+        apiKey: true,
+        providerId: true,
         projects: { select: { remoteUrl: true }, take: 1 },
       },
     });
 
     if (!ws) {
-      return { workspaceId, workspaceName: 'Unknown', username: null, tokenMasked: null, remoteUrl: null, isSet: false, lastVerifiedAt: null };
+      return {
+        workspaceId, workspaceName: 'Unknown', username: null, tokenMasked: null,
+        remoteUrl: null, isSet: false, lastVerifiedAt: null,
+        providerId: null, providerKeySet: false, providerKeyMasked: null,
+      };
     }
 
     return {
@@ -122,6 +131,9 @@ export class GitAuthService {
       remoteUrl: ws.projects[0]?.remoteUrl ?? null,
       isSet: !!ws.gitToken && !!ws.gitUsername,
       lastVerifiedAt: null,
+      providerId: ws.providerId ?? null,
+      providerKeySet: !!ws.apiKey,
+      providerKeyMasked: ws.apiKey ? this.maskToken(ws.apiKey) : null,
     };
   }
 

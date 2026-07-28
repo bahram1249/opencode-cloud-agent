@@ -23,7 +23,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: false,
     cors: {
-      origin: true,
+      origin: (process.env['MINI_APP_URL'] || process.env['WEBHOOK_DOMAIN']) ? true : false,
       credentials: true,
       exposedHeaders: ['X-Telegram-Init-Data'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Telegram-Init-Data'],

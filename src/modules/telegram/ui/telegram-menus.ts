@@ -7,6 +7,7 @@ import { generateAuthToken } from 'src/common/utils/auth-token';
 
 const PROVIDER_ICONS: Record<string, string> = {
   opencode: '🔵',
+  'opencode-go': '🟢',
   openai: '🟢',
   anthropic: '🟣',
   'github-copilot': '⚫',

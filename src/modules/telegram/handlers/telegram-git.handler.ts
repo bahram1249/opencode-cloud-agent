@@ -85,10 +85,13 @@ export class TelegramGitHandler {
       return;
     }
 
+    const containerPath = active.containerId
+      ? this.workspaceService.resolveContainerPath(gitPath, active.workDir, active.containerId) : gitPath;
+
     try {
       switch (sub) {
         case 'status': {
-          const s = await this.gitCommandsService.status(gitPath, active.containerId ?? undefined);
+          const s = await this.gitCommandsService.status(containerPath, active.containerId ?? undefined);
           const files = s.files.slice(0, 20).map((f) => `  ${f}`).join('\n');
           await this.notificationService.sendRaw(
             chatId,
@@ -97,7 +100,7 @@ export class TelegramGitHandler {
           break;
         }
         case 'diff': {
-          const d = await this.gitCommandsService.diff(gitPath, undefined, active.containerId ?? undefined);
+          const d = await this.gitCommandsService.diff(containerPath, undefined, active.containerId ?? undefined);
           if (!d.trim()) {
             await this.notificationService.sendRaw(chatId, `No unstaged changes (${projName}).`);
             return;
@@ -107,7 +110,7 @@ export class TelegramGitHandler {
           break;
         }
         case 'add': {
-          await this.gitCommandsService.add(gitPath, undefined, active.containerId ?? undefined);
+          await this.gitCommandsService.add(containerPath, undefined, active.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Staged all changes (${projName})`);
           break;
         }
@@ -116,26 +119,40 @@ export class TelegramGitHandler {
             await this.notificationService.sendRaw(chatId, 'Usage: /git commit <message>');
             return;
           }
-          const r = await this.gitCommandsService.commit(gitPath, rest, active.containerId ?? undefined);
+          const r = await this.gitCommandsService.commit(containerPath, rest, active.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Committed (${projName}): ${r.sha.slice(0, 7)}`);
           break;
         }
         case 'push': {
-          const pushCreds = await this.workspaceService.getWorkspaceCredentials(active.id);
-          const pushGitCreds = pushCreds.gitToken && pushCreds.gitUsername ? { username: pushCreds.gitUsername, token: pushCreds.gitToken } : undefined;
-          await this.gitCommandsService.push(gitPath, undefined, undefined, active.containerId ?? undefined, pushGitCreds);
+          let pushEnv: Record<string, string> | undefined;
+          let pushCleanup: (() => Promise<void>) | undefined;
+          const pushCid = active.containerId ?? undefined;
+          if (pushCid) {
+            const p = await this.workspaceService.prepareGitAuthEnv(pushCid, active.id);
+            pushEnv = Object.keys(p.gitAuthEnv).length > 0 ? p.gitAuthEnv : undefined;
+            pushCleanup = p.cleanup;
+          }
+          await this.gitCommandsService.push(containerPath, undefined, undefined, pushCid, pushEnv);
+          if (pushCleanup) await pushCleanup().catch(() => {});
           await this.notificationService.sendRaw(chatId, `✅ Pushed (${projName})`);
           break;
         }
         case 'pull': {
-          const pullCreds = await this.workspaceService.getWorkspaceCredentials(active.id);
-          const pullGitCreds = pullCreds.gitToken && pullCreds.gitUsername ? { username: pullCreds.gitUsername, token: pullCreds.gitToken } : undefined;
-          await this.gitCommandsService.pull(gitPath, undefined, undefined, active.containerId ?? undefined, pullGitCreds);
+          let pullEnv: Record<string, string> | undefined;
+          let pullCleanup: (() => Promise<void>) | undefined;
+          const pullCid = active.containerId ?? undefined;
+          if (pullCid) {
+            const p = await this.workspaceService.prepareGitAuthEnv(pullCid, active.id);
+            pullEnv = Object.keys(p.gitAuthEnv).length > 0 ? p.gitAuthEnv : undefined;
+            pullCleanup = p.cleanup;
+          }
+          await this.gitCommandsService.pull(containerPath, undefined, undefined, pullCid, pullEnv);
+          if (pullCleanup) await pullCleanup().catch(() => {});
           await this.notificationService.sendRaw(chatId, `✅ Pulled (${projName})`);
           break;
         }
         case 'log': {
-          const r = await this.gitCommandsService.log(gitPath, 5, active.containerId ?? undefined);
+          const r = await this.gitCommandsService.log(containerPath, 5, active.containerId ?? undefined);
           const lines = r.commits.map((c) => `${c.sha.slice(0, 7)} ${c.message} (${c.author})`);
           await this.notificationService.sendRaw(chatId, `📋 Log (${projName}):\n${lines.join('\n')}`);
           break;
@@ -199,36 +216,60 @@ export class TelegramGitHandler {
       switch (type) {
         case 'git:diff': {
           const diffWs = await this.workspaceService.findById(project.workspaceId);
-          const d = await this.gitCommandsService.diff(project.gitPath, undefined, diffWs?.containerId ?? undefined);
+          const diffContainerPath = diffWs?.containerId
+            ? this.workspaceService.resolveContainerPath(project.gitPath, diffWs.workDir, diffWs.containerId) : project.gitPath;
+          const d = await this.gitCommandsService.diff(diffContainerPath, undefined, diffWs?.containerId ?? undefined);
           const clipped = d.length > 3500 ? d.slice(0, 3500) + '...' : d;
           await this.notificationService.sendRaw(chatId, `📝 Diff (${project.name}):\n${clipped || 'No changes'}`);
           break;
         }
         case 'git:add': {
           const addWs = await this.workspaceService.findById(project.workspaceId);
-          await this.gitCommandsService.add(project.gitPath, undefined, addWs?.containerId ?? undefined);
+          const addContainerPath = addWs?.containerId
+            ? this.workspaceService.resolveContainerPath(project.gitPath, addWs.workDir, addWs.containerId) : project.gitPath;
+          await this.gitCommandsService.add(addContainerPath, undefined, addWs?.containerId ?? undefined);
           await this.notificationService.sendRaw(chatId, `✅ Staged (${project.name})`);
           break;
         }
         case 'git:push': {
-          const pushCreds = await this.workspaceService.getWorkspaceCredentials(project.workspaceId);
-          const pushGitCreds = pushCreds.gitToken && pushCreds.gitUsername ? { username: pushCreds.gitUsername, token: pushCreds.gitToken } : undefined;
           const pushWs = await this.workspaceService.findById(project.workspaceId);
-          await this.gitCommandsService.push(project.gitPath, undefined, undefined, pushWs?.containerId ?? undefined, pushGitCreds);
+          const pushCid = pushWs?.containerId ?? undefined;
+          const pushContainerPath = pushCid
+            ? this.workspaceService.resolveContainerPath(project.gitPath, pushWs!.workDir, pushCid) : project.gitPath;
+          let pushEnv: Record<string, string> | undefined;
+          let pushCleanup: (() => Promise<void>) | undefined;
+          if (pushCid) {
+            const p = await this.workspaceService.prepareGitAuthEnv(pushCid, project.workspaceId);
+            pushEnv = Object.keys(p.gitAuthEnv).length > 0 ? p.gitAuthEnv : undefined;
+            pushCleanup = p.cleanup;
+          }
+          await this.gitCommandsService.push(pushContainerPath, undefined, undefined, pushCid, pushEnv);
+          if (pushCleanup) await pushCleanup().catch(() => {});
           await this.notificationService.sendRaw(chatId, `✅ Pushed (${project.name})`);
           break;
         }
         case 'git:pull': {
-          const pullCreds = await this.workspaceService.getWorkspaceCredentials(project.workspaceId);
-          const pullGitCreds = pullCreds.gitToken && pullCreds.gitUsername ? { username: pullCreds.gitUsername, token: pullCreds.gitToken } : undefined;
           const pullWs = await this.workspaceService.findById(project.workspaceId);
-          await this.gitCommandsService.pull(project.gitPath, undefined, undefined, pullWs?.containerId ?? undefined, pullGitCreds);
+          const pullCid = pullWs?.containerId ?? undefined;
+          const pullContainerPath = pullCid
+            ? this.workspaceService.resolveContainerPath(project.gitPath, pullWs!.workDir, pullCid) : project.gitPath;
+          let pullEnv: Record<string, string> | undefined;
+          let pullCleanup: (() => Promise<void>) | undefined;
+          if (pullCid) {
+            const p = await this.workspaceService.prepareGitAuthEnv(pullCid, project.workspaceId);
+            pullEnv = Object.keys(p.gitAuthEnv).length > 0 ? p.gitAuthEnv : undefined;
+            pullCleanup = p.cleanup;
+          }
+          await this.gitCommandsService.pull(pullContainerPath, undefined, undefined, pullCid, pullEnv);
+          if (pullCleanup) await pullCleanup().catch(() => {});
           await this.notificationService.sendRaw(chatId, `✅ Pulled (${project.name})`);
           break;
         }
         case 'git:log': {
           const logWs = await this.workspaceService.findById(project.workspaceId);
-          const r = await this.gitCommandsService.log(project.gitPath, 5, logWs?.containerId ?? undefined);
+          const logContainerPath = logWs?.containerId
+            ? this.workspaceService.resolveContainerPath(project.gitPath, logWs.workDir, logWs.containerId) : project.gitPath;
+          const r = await this.gitCommandsService.log(logContainerPath, 5, logWs?.containerId ?? undefined);
           const lines = r.commits.map((c) => `${c.sha.slice(0, 7)} ${c.message}`);
           await this.notificationService.sendRaw(chatId, `📋 Log (${project.name}):\n${lines.join('\n')}`);
           break;
@@ -344,32 +385,41 @@ export class TelegramGitHandler {
     const status = await this.gitAuthService.getCredentialsStatus(workspaceId);
 
     if (!status.isSet) {
-      await this.notificationService.sendRaw(
-        chatId,
-        '🔑 Git Credentials — Not configured\n\n' +
-        'To connect to git repositories, set up credentials:\n' +
-        '  /git login <username> <token> <remote-url>\n\n' +
-        'Examples:\n' +
-        '  /git login myuser ghp_abc123def456\n' +
-        '  /git login myuser ghp_abc123def456 https://github.com/myorg/project.git\n' +
-        '  /git login myuser glpat-xyz789 https://gitlab.com/mygroup/repo.git\n\n' +
-        '💡 Getting a token:\n' +
-        '  • GitHub:    https://github.com/settings/tokens (needs "repo" scope)\n' +
-        '  • GitLab:    https://gitlab.com/-/user_settings/personal_access_tokens\n' +
-        '  • Bitbucket: https://bitbucket.org/account/settings/app-passwords/\n' +
-        '  • Self-hosted: Check your admin for the token URL',
-      );
-      return;
-    }
+    const providerLine = status.providerId
+      ? `\n  Provider:   ${status.providerId}\n  API Key:    ${status.providerKeyMasked ?? '❌ not set'}`
+      : '';
 
     await this.notificationService.sendRaw(
       chatId,
-      `🔍 Git Credential Status\n\n` +
+      '🔑 Git & Provider Credentials\n\n' +
+      `  Git:        ${status.isSet ? '✅ Configured' : '❌ Not set'}${providerLine}\n\n` +
+      'To connect to git repositories, set up credentials:\n' +
+      '  /git login <username> <token> <remote-url>\n\n' +
+      'Examples:\n' +
+      '  /git login myuser ghp_abc123def456\n' +
+      '  /git login myuser ghp_abc123def456 https://github.com/myorg/project.git\n' +
+      '  /git login myuser glpat-xyz789 https://gitlab.com/mygroup/repo.git\n\n' +
+      '💡 Getting a token:\n' +
+      '  • GitHub:    https://github.com/settings/tokens (needs "repo" scope)\n' +
+      '  • GitLab:    https://gitlab.com/-/user_settings/personal_access_tokens\n' +
+      '  • Bitbucket: https://bitbucket.org/account/settings/app-passwords/\n' +
+      '  • Self-hosted: Check your admin for the token URL',
+    );
+      return;
+    }
+
+    const providerLine = status.providerId
+      ? `\n  Provider:   ${status.providerId}\n  API Key:    ${status.providerKeyMasked ?? '❌ not set'}`
+      : '';
+
+    await this.notificationService.sendRaw(
+      chatId,
+      `🔍 Git & Provider Credential Status\n\n` +
       `  Workspace:  ${status.workspaceName}\n` +
-      `  Status:     ✅ Active\n\n` +
+      `  Git Status: ${status.isSet ? '✅ Configured' : '❌ Not set'}\n\n` +
       `  Username:   ${status.username}\n` +
       `  Token:      ${status.tokenMasked}\n` +
-      `  Remote:     ${status.remoteUrl ?? 'not set'}\n` +
+      `  Remote:     ${status.remoteUrl ?? 'not set'}${providerLine}\n` +
       `  Last verified: (not tracked)\n\n` +
       `/git test              — Re-validate credentials now\n` +
       `/git logout            — Remove credentials\n` +

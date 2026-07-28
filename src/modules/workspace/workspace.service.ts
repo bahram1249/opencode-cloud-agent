@@ -1,218 +1,75 @@
-import { Inject, Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
-import { PRISMA_CLIENT } from 'src/database/prisma.module';
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
-import { basename, resolve, join } from 'node:path';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { ConfigService } from '@nestjs/config';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
 import { DockerWorkspaceService } from './docker-workspace.service';
+import { WorkspaceCrudService } from './workspace-crud.service';
+import { ProjectService } from './project.service';
+import { WorkspaceGitSyncService } from './workspace-git-sync.service';
+import { DependencyInstallService } from './dependency-install.service';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto, CreateProjectDto, UpdateProjectDto } from './dto/workspace.dto';
-
-const execFileAsync = promisify(execFile);
 
 @Injectable()
 export class WorkspaceService {
   private readonly logger = new Logger(WorkspaceService.name);
 
   constructor(
-    @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
+    public readonly crud: WorkspaceCrudService,
+    public readonly projectService: ProjectService,
+    public readonly gitSync: WorkspaceGitSyncService,
+    public readonly depInstall: DependencyInstallService,
     private readonly git: GitCommandsService,
     private readonly dockerWorkspaces: DockerWorkspaceService,
     private readonly config: ConfigService,
   ) {}
 
-  async ensureTenant(telegramUserId: string, displayName?: string) {
-    return this.prisma.tenant.upsert({
-      where: { telegramUserId },
-      update: displayName ? { displayName } : {},
-      create: { telegramUserId, displayName },
-    });
+  // ── Tenant ──────────────────────────────────────────────────────────
+
+  ensureTenant(telegramUserId: string, displayName?: string) {
+    return this.crud.ensureTenant(telegramUserId, displayName);
   }
 
-  async create(dto: CreateWorkspaceDto, telegramUserId = 'legacy') {
-    const tenant = await this.ensureTenant(telegramUserId);
-    const wsId = randomUUID();
-    const workspaceRoot = this.config.get<string>('app.workspaceRoot', '/data/workspaces');
-    const absPath = resolve(join(workspaceRoot, tenant.id, wsId));
-    mkdirSync(absPath, { recursive: true });
-    if (!statSync(absPath).isDirectory()) throw new BadRequestException(`Path is not a directory: ${absPath}`);
+  // ── Workspace CRUD ───────────────────────────────────────────────────
 
-    const existing = await this.prisma.workspace.findUnique({ where: { tenantId_name: { tenantId: tenant.id, name: dto.name } } });
-    if (existing) throw new BadRequestException(`Workspace "${dto.name}" already exists`);
-
-    const ws = await this.prisma.workspace.create({
-      data: { id: wsId, tenantId: tenant.id, name: dto.name, workDir: absPath, providerId: dto.providerId, apiKey: dto.apiKey, model: dto.model },
-      include: { projects: true, tenant: true },
-    });
-    const creds = await this.getWorkspaceCredentials(ws.id);
-    const containerId = await this.dockerWorkspaces.ensureContainer({
-      workspaceId: ws.id, tenantId: tenant.id, workDir: absPath, providerId: dto.providerId, apiKey: creds.apiKey, model: dto.model,
-      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
-    });
-    if (containerId) return this.prisma.workspace.update({ where: { id: ws.id }, data: { containerId }, include: { projects: true, tenant: true } });
-    return ws;
+  create(dto: CreateWorkspaceDto, telegramUserId = 'legacy') {
+    return this.crud.create(dto, telegramUserId);
   }
 
-  async findAll(telegramUserId?: string) {
-    const tenant = telegramUserId ? await this.ensureTenant(telegramUserId) : null;
-    return this.prisma.workspace.findMany({
-      where: tenant ? { tenantId: tenant.id } : undefined,
-      orderBy: { name: 'asc' },
-      include: { projects: true, tenant: true, _count: { select: { sessions: true } } },
-    });
+  findAll(telegramUserId?: string) {
+    return this.crud.findAll(telegramUserId);
   }
 
-  async findById(id: string, telegramUserId?: string) {
-    const tenant = telegramUserId ? await this.ensureTenant(telegramUserId) : null;
-    return this.prisma.workspace.findFirst({
-      where: { id, ...(tenant ? { tenantId: tenant.id } : {}) },
-      include: { projects: true, tenant: true, _count: { select: { sessions: true } } },
-    });
+  findById(id: string, telegramUserId?: string) {
+    return this.crud.findById(id, telegramUserId);
   }
 
-  async findByName(name: string, telegramUserId?: string) {
-    const tenant = telegramUserId ? await this.ensureTenant(telegramUserId) : null;
-    return this.prisma.workspace.findFirst({ where: { name, ...(tenant ? { tenantId: tenant.id } : {}) }, include: { projects: true, tenant: true } });
+  findByName(name: string, telegramUserId?: string) {
+    return this.crud.findByName(name, telegramUserId);
   }
 
-  async getActive(telegramUserId = 'legacy') {
-    const tenant = await this.ensureTenant(telegramUserId);
-    return this.prisma.workspace.findFirst({ where: { tenantId: tenant.id, active: true }, include: { projects: true, tenant: true } });
+  getActive(telegramUserId = 'legacy') {
+    return this.crud.getActive(telegramUserId);
   }
 
-  async setActive(id: string, telegramUserId = 'legacy') {
-    const ws = await this.findById(id, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${id} not found`);
-    await this.prisma.workspace.updateMany({ where: { tenantId: ws.tenantId, active: true }, data: { active: false } });
-    await this.prisma.workspace.update({ where: { id }, data: { active: true } });
-    return this.findById(id, telegramUserId);
+  setActive(id: string, telegramUserId = 'legacy') {
+    return this.crud.setActive(id, telegramUserId);
   }
 
-  async update(id: string, dto: UpdateWorkspaceDto, telegramUserId = 'legacy') {
-    const ws = await this.findById(id, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${id} not found`);
-    const data: Record<string, unknown> = {};
-
-    if (dto.name) {
-      data.name = dto.name;
-    }
-    if (dto.providerId !== undefined) data.providerId = dto.providerId;
-    if (dto.apiKey !== undefined) data.apiKey = dto.apiKey;
-    if (dto.model !== undefined) data.model = dto.model;
-    if (dto.active === true) await this.prisma.workspace.updateMany({ where: { tenantId: ws.tenantId, active: true }, data: { active: false } });
-    if (dto.active !== undefined) data.active = dto.active;
-    const updated = await this.prisma.workspace.update({ where: { id }, data, include: { projects: true, tenant: true } });
-
-    const creds = await this.getWorkspaceCredentials(updated.id);
-    const containerId = await this.dockerWorkspaces.ensureContainer({ workspaceId: updated.id, tenantId: updated.tenantId, workDir: updated.workDir, providerId: updated.providerId, apiKey: creds.apiKey, model: updated.model, gitToken: creds.gitToken, gitUsername: creds.gitUsername });
-    if (containerId && containerId !== updated.containerId) {
-      await this.prisma.workspace.update({ where: { id }, data: { containerId }, include: { projects: true, tenant: true } });
-    }
-    // Sync projects after container ensure to pull latest on start
-    if (containerId) {
-      await this.syncProjects(id, telegramUserId).catch((err) =>
-        { this.logger.warn(`Background sync after update failed: ${(err as Error).message}`); },
-      );
-    }
-    return this.findById(id, telegramUserId);
+  update(id: string, dto: UpdateWorkspaceDto, telegramUserId = 'legacy') {
+    return this.crud.update(id, dto, telegramUserId);
   }
 
-  async remove(id: string, telegramUserId = 'legacy') {
-    const ws = await this.findById(id, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${id} not found`);
-    await this.dockerWorkspaces.removeContainer(ws.containerId);
-    return this.prisma.workspace.delete({ where: { id } });
+  remove(id: string, telegramUserId = 'legacy') {
+    return this.crud.remove(id, telegramUserId);
   }
 
-  async addProject(workspaceId: string, dto: CreateProjectDto, telegramUserId = 'legacy') {
-    const ws = await this.findById(workspaceId, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
-    const containerId = ws.containerId ?? undefined;
-    const relPath = dto.path || '.';
-    const absPath = relPath === '.' ? ws.workDir : resolve(ws.workDir, relPath);
-    const containerWorkDir = containerId ? this.dockerWorkspaces.toContainerPath(ws.workDir, ws.workDir) : ws.workDir;
-    const containerPath = containerId
-      ? this.dockerWorkspaces.toContainerPath(absPath, ws.workDir)
-      : absPath;
-
-    let didClone = false;
-    if (dto.remoteUrl && !(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
-      const target = containerPath === containerWorkDir ? '.' : relPath;
-      const creds = await this.getWorkspaceCredentials(workspaceId);
-      const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
-      await this.git.clone(containerWorkDir, dto.remoteUrl, target, containerId, gitCreds);
-      didClone = true;
-    }
-    if (!(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
-      throw new BadRequestException(`Path does not exist: ${containerPath}`);
-    }
-    if (!(await this.git.validateRepo(containerPath, containerId))) throw new BadRequestException(`Not a git repository at "${relPath}". The folder must have a .git directory.`);
-    const project = await this.prisma.workspaceProject.create({
-      data: {
-        workspaceId,
-        name: dto.name || basename(relPath === '.' ? ws.name : relPath),
-        gitPath: absPath,
-        path: relPath,
-        remoteUrl: dto.remoteUrl,
-      },
-    });
-    // Auto-install dependencies after clone if enabled
-    if (didClone && project.autoInstall && containerId) {
-      try {
-        const installResult = await this.installProjectDependencies(project.id);
-        this.logger.log(`Auto-install for ${project.name}: ${installResult}`);
-      } catch (err) {
-        this.logger.warn(`Auto-install failed for ${project.name}: ${(err as Error).message}`);
-      }
-    }
-    return project;
-  }
-
-  async updateProject(projectId: string, dto: UpdateProjectDto) {
-    const project = await this.prisma.workspaceProject.findUnique({ where: { id: projectId }, include: { workspace: true } });
-    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
-    const data: Record<string, unknown> = {};
-    if (dto.name) data.name = dto.name;
-    if (dto.path) {
-      data.path = dto.path;
-      const absPath = dto.path === '.' ? project.workspace.workDir : resolve(project.workspace.workDir, dto.path);
-      data.gitPath = absPath;
-    }
-    if (dto.branch) data.branch = dto.branch;
-    if (dto.remoteUrl !== undefined) data.remoteUrl = dto.remoteUrl;
-    if (dto.autoInstall !== undefined) data.autoInstall = dto.autoInstall;
-    if (dto.installCommand !== undefined) data.installCommand = dto.installCommand;
-    if (dto.enabled !== undefined) data.enabled = dto.enabled;
-    return this.prisma.workspaceProject.update({ where: { id: projectId }, data });
-  }
+  // ── Provider ─────────────────────────────────────────────────────────
 
   async configureProvider(workspaceId: string, telegramUserId: string, providerId: string, apiKey: string) {
-    const ws = await this.findById(workspaceId, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
-    await this.prisma.workspace.update({
-      where: { id: ws.id },
-      data: { providerId, apiKey },
-    });
-    const creds = await this.getWorkspaceCredentials(ws.id);
-    const containerId = await this.dockerWorkspaces.ensureContainer({
-      workspaceId: ws.id,
-      tenantId: ws.tenantId,
-      workDir: ws.workDir,
-      providerId,
-      apiKey: creds.apiKey,
-      model: ws.model,
-      gitToken: creds.gitToken,
-      gitUsername: creds.gitUsername,
-    });
-    const result = await this.prisma.workspace.update({
-      where: { id: ws.id },
-      data: { providerId, apiKey, ...(containerId ? { containerId } : {}) },
-      include: { projects: true, tenant: true },
-    });
-    if (containerId) {
+    const result = await this.crud.configureProvider(workspaceId, telegramUserId, providerId, apiKey);
+    const ws = await this.crud.findById(workspaceId, telegramUserId);
+    if (ws?.containerId) {
       await this.syncProjects(workspaceId, telegramUserId).catch((err) =>
         { this.logger.warn(`Background sync after configureProvider failed: ${(err as Error).message}`); },
       );
@@ -221,26 +78,9 @@ export class WorkspaceService {
   }
 
   async setDefaultModel(workspaceId: string, telegramUserId: string, model: string) {
-    const ws = await this.findById(workspaceId, telegramUserId);
-    if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
-    const providerId = model.split('/')[0] || ws.providerId;
-    const updated = await this.prisma.workspace.update({
-      where: { id: ws.id },
-      data: { model, providerId },
-      include: { projects: true, tenant: true },
-    });
-    const creds = await this.getWorkspaceCredentials(updated.id);
-    const containerId = await this.dockerWorkspaces.ensureContainer({
-      workspaceId: updated.id,
-      tenantId: updated.tenantId,
-      workDir: updated.workDir,
-      providerId: updated.providerId,
-      apiKey: creds.apiKey,
-      model: updated.model,
-      gitToken: creds.gitToken,
-      gitUsername: creds.gitUsername,
-    });
-    if (containerId) {
+    const updated = await this.crud.setDefaultModel(workspaceId, telegramUserId, model);
+    const ws = await this.crud.findById(workspaceId, telegramUserId);
+    if (ws?.containerId) {
       await this.syncProjects(workspaceId, telegramUserId).catch((err) =>
         { this.logger.warn(`Background sync after setDefaultModel failed: ${(err as Error).message}`); },
       );
@@ -249,215 +89,158 @@ export class WorkspaceService {
   }
 
   async listOpenCodeModels(workspaceId: string, telegramUserId: string, providerId?: string): Promise<string[]> {
-    const ws = await this.findById(workspaceId, telegramUserId);
+    const ws = await this.crud.findById(workspaceId, telegramUserId);
     if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
 
-    // Ensure container is running before listing models
-    const creds = await this.getWorkspaceCredentials(ws.id);
+    const creds = await this.crud.getWorkspaceCredentials(ws.id);
     const containerId = await this.dockerWorkspaces.ensureContainer({
-      workspaceId: ws.id,
-      tenantId: ws.tenantId,
-      workDir: ws.workDir,
-      providerId: ws.providerId,
-      apiKey: creds.apiKey,
-      model: ws.model,
-      gitToken: creds.gitToken,
-      gitUsername: creds.gitUsername,
+      workspaceId: ws.id, tenantId: ws.tenantId, workDir: ws.workDir,
+      providerId: ws.providerId, apiKey: creds.apiKey, model: ws.model,
+      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
     });
     if (!containerId) {
-      throw new BadRequestException('Docker container not available. Start Docker and ensure WORKSPACE_CONTAINERS_ENABLED is true.');
+      throw new NotFoundException('Docker container not available.');
     }
-    const execEnv = this.dockerWorkspaces.buildProviderEnv({
-      workspaceId: ws.id,
-      tenantId: ws.tenantId,
-      workDir: ws.workDir,
-      providerId: ws.providerId,
-      apiKey: creds.apiKey,
-      model: ws.model,
-      gitToken: creds.gitToken,
-      gitUsername: creds.gitUsername,
-    });
+    const spec = {
+      workspaceId: ws.id, tenantId: ws.tenantId, workDir: ws.workDir,
+      providerId: ws.providerId, apiKey: creds.apiKey, model: ws.model,
+      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
+    };
+    let credFilePath: string | undefined;
+    const credContent = this.dockerWorkspaces.buildCredentialsFileContent(spec);
+    if (credContent) {
+      credFilePath = await this.dockerWorkspaces.writeCredentialsFile(containerId, credContent);
+    }
+    const execEnv: Record<string, string> = {};
+    if (credFilePath) execEnv.CREDENTIALS_FILE = credFilePath;
     const dockerArgs = this.dockerWorkspaces.dockerExecNonInteractiveArgs(containerId, ws.workDir, 'opencode', ['models'], execEnv);
-    const { stdout } = await execFileAsync('docker', dockerArgs, {
-      cwd: ws.workDir,
-      maxBuffer: 10 * 1024 * 1024,
-      timeout: 30000,
-    });
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    let stdout: string;
+    try {
+      const result = await execFileAsync('docker', dockerArgs, { cwd: ws.workDir, maxBuffer: 10 * 1024 * 1024, timeout: 30000 });
+      stdout = result.stdout;
+    } finally {
+      if (credFilePath) this.dockerWorkspaces.removeCredentialsFile(containerId, credFilePath).catch(() => {});
+    }
 
     const models = new Set<string>();
     for (const match of stdout.matchAll(/([a-z0-9][a-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.:-]*)/g)) {
       const model = match[1];
-      if (!providerId || model.startsWith(`${providerId}/`)) {
-        models.add(model);
-      }
+      if (!providerId || model.startsWith(`${providerId}/`)) models.add(model);
     }
     return [...models].sort();
   }
 
-  async syncProjects(workspaceId: string, telegramUserId = 'legacy'): Promise<Array<{ name: string; action: string; ok: boolean; message: string }>> {
-    const ws = await this.findById(workspaceId, telegramUserId);
+  // ── Projects ─────────────────────────────────────────────────────────
+
+  async addProject(workspaceId: string, dto: CreateProjectDto, telegramUserId = 'legacy') {
+    const creds = await this.crud.getWorkspaceCredentials(workspaceId);
+    const ws = await this.crud.findById(workspaceId, telegramUserId);
     if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
-    const creds = await this.getWorkspaceCredentials(ws.id);
-    await this.dockerWorkspaces.ensureContainer({
-      workspaceId: ws.id,
-      tenantId: ws.tenantId,
-      workDir: ws.workDir,
-      providerId: ws.providerId,
-      apiKey: creds.apiKey,
-      model: ws.model,
-      gitToken: creds.gitToken,
-      gitUsername: creds.gitUsername,
-    });
-
     const containerId = ws.containerId ?? undefined;
-    const workDir = ws.workDir;
 
-    const projects = await this.prisma.workspaceProject.findMany({ where: { workspaceId, enabled: true }, orderBy: { name: 'asc' } });
-    const results: Array<{ name: string; action: string; ok: boolean; message: string }> = [];
-    for (const project of projects) {
-      try {
-        const projectAbsPath = project.gitPath;
-        const containerPath = containerId
-          ? this.dockerWorkspaces.toContainerPath(projectAbsPath, workDir)
-          : projectAbsPath;
-        const containerWorkDir = containerId
-          ? this.dockerWorkspaces.toContainerPath(workDir, workDir)
-          : workDir;
-
-        if (containerId ? !(await this.execPathExists(containerId, containerPath)) : !existsSync(projectAbsPath)) {
-          if (!project.remoteUrl) {
-            results.push({ name: project.name, action: 'skip', ok: false, message: 'missing path and no remote URL configured' });
-            continue;
-          }
-          const target = containerPath === containerWorkDir ? '.' : project.path || '.';
-          const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
-          await this.git.clone(containerWorkDir, project.remoteUrl, target, containerId, gitCreds);
-          results.push({ name: project.name, action: 'clone', ok: true, message: project.remoteUrl });
-          // Auto-install after clone
-          if (project.autoInstall && containerId) {
-            try {
-              const installResult = await this.installProjectDependencies(project.id);
-              this.logger.log(`Auto-install after clone for ${project.name}: ${installResult}`);
-            } catch (err) {
-              this.logger.warn(`Auto-install after clone failed for ${project.name}: ${(err as Error).message}`);
-            }
-          }
-          continue;
-        }
-
-        if (!(await this.git.validateRepo(containerPath, containerId))) {
-          results.push({ name: project.name, action: 'skip', ok: false, message: 'path exists but is not a git repository' });
-          continue;
-        }
-
-        const status = await this.git.status(containerPath, containerId);
-        if (!status.clean) {
-          results.push({ name: project.name, action: 'skip', ok: true, message: 'local changes present; skipped automatic pull' });
-          continue;
-        }
-        const gitCreds = creds.gitToken && creds.gitUsername ? { username: creds.gitUsername, token: creds.gitToken } : undefined;
-        const output = await this.git.pull(containerPath, 'origin', project.branch, containerId, gitCreds);
-        results.push({ name: project.name, action: 'pull', ok: true, message: output.trim() || 'already up to date' });
-        // Auto-install after pull
-        if (project.autoInstall && containerId) {
-          try {
-            const installResult = await this.installProjectDependencies(project.id);
-            this.logger.log(`Auto-install after pull for ${project.name}: ${installResult}`);
-          } catch (err) {
-            this.logger.warn(`Auto-install after pull failed for ${project.name}: ${(err as Error).message}`);
-          }
-        }
-      } catch (err) {
-        results.push({ name: project.name, action: 'error', ok: false, message: (err as Error).message });
-      }
+    let gitAuthEnv: Record<string, string> | undefined;
+    let cleanup: (() => Promise<void>) | undefined;
+    if (containerId && dto.remoteUrl && creds.gitToken && creds.gitUsername) {
+      const content = this.dockerWorkspaces.buildCredentialsFileContent({
+        workspaceId, tenantId: '', workDir: '',
+        gitToken: creds.gitToken, gitUsername: creds.gitUsername,
+      });
+      const credFile = await this.dockerWorkspaces.writeCredentialsFile(containerId, content);
+      const askpass = await this.dockerWorkspaces.writeGitAskpassScript(containerId);
+      gitAuthEnv = {
+        CREDENTIALS_FILE: credFile, GIT_ASKPASS: askpass, GIT_TERMINAL_PROMPT: '0',
+        GIT_USERNAME: creds.gitUsername, GIT_TOKEN: creds.gitToken,
+        GITHUB_USER: creds.gitUsername, GITHUB_TOKEN: creds.gitToken,
+      };
+      cleanup = async () => {
+        await this.dockerWorkspaces.removeCredentialsFile(containerId, credFile).catch(() => {});
+        await this.dockerWorkspaces.removeCredentialsFile(containerId, askpass).catch(() => {});
+      };
     }
-    return results;
+
+    const project = await this.projectService.addProject(workspaceId, dto, telegramUserId, gitAuthEnv, cleanup);
+    if (dto.remoteUrl && project.autoInstall && containerId) {
+      this.depInstall.installProjectDependencies(project.id).catch((err) =>
+        { this.logger.warn(`Auto-install failed for ${project.name}: ${(err as Error).message}`); },
+      );
+    }
+    return project;
+  }
+
+  updateProject(projectId: string, dto: UpdateProjectDto) {
+    return this.projectService.updateProject(projectId, dto);
+  }
+
+  findProjectById(projectId: string) {
+    return this.projectService.findProjectById(projectId);
+  }
+
+  removeProject(projectId: string) {
+    return this.projectService.removeProject(projectId);
+  }
+
+  getProjects(workspaceId: string) {
+    return this.projectService.getProjects(workspaceId);
   }
 
   resolveContainerPath(hostPath: string, hostWorkDir: string, _containerId: string): string {
     return this.dockerWorkspaces.toContainerPath(hostPath, hostWorkDir);
   }
 
-  async installProjectDependencies(projectId: string, _telegramUserId?: string): Promise<string> {
-    const project = await this.prisma.workspaceProject.findUnique({
-      where: { id: projectId },
-      include: { workspace: true },
+  // ── Git Sync ─────────────────────────────────────────────────────────
+
+  async syncProjects(workspaceId: string, telegramUserId = 'legacy'): Promise<Array<{ name: string; action: string; ok: boolean; message: string }>> {
+    const ws = await this.crud.findById(workspaceId, telegramUserId);
+    if (!ws) throw new NotFoundException(`Workspace ${workspaceId} not found`);
+    const creds = await this.crud.getWorkspaceCredentials(ws.id);
+    await this.dockerWorkspaces.ensureContainer({
+      workspaceId: ws.id, tenantId: ws.tenantId, workDir: ws.workDir,
+      providerId: ws.providerId, apiKey: creds.apiKey, model: ws.model,
+      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
     });
-    if (!project) throw new NotFoundException(`Project ${projectId} not found`);
-
-    if (!project.autoInstall) return 'Auto-install is disabled for this project.';
-
-    const containerId = project.workspace.containerId;
-    if (!containerId) return 'No container running for this workspace.';
-
-    const projectAbsPath = project.gitPath;
-    const containerPath = this.dockerWorkspaces.toContainerPath(projectAbsPath, project.workspace.workDir);
-
-    const installCmd = await this.detectProjectType(containerId, containerPath);
-    if (!installCmd) return `No recognized project type found at ${project.path || '.'}`;
-
-    try {
-      const command = project.installCommand || installCmd;
-      const parts = command.split(' ');
-      const cmd = parts[0];
-      const args = parts.slice(1);
-      await this.dockerWorkspaces.execInContainer(containerId, containerPath, cmd, args);
-      return `✅ Dependencies installed (${command})`;
-    } catch (err) {
-      throw new Error(`Dependency installation failed: ${(err as Error).message}`);
-    }
+    return this.gitSync.syncProjects(workspaceId, ws.containerId ?? undefined, ws.workDir, creds);
   }
 
-  private async detectProjectType(containerId: string, containerPath: string): Promise<string | null> {
-    const detectors: Array<{ file: string; command: string }> = [
-      { file: 'package.json', command: 'npm install' },
-      { file: 'requirements.txt', command: 'pip install -r requirements.txt' },
-      { file: 'pyproject.toml', command: 'pip install -e .' },
-      { file: 'Cargo.toml', command: 'cargo build' },
-      { file: 'go.mod', command: 'go mod download' },
-      { file: 'Gemfile', command: 'bundle install' },
-      { file: 'composer.json', command: 'composer install' },
-    ];
+  // ── Dependencies ─────────────────────────────────────────────────────
 
-    for (const d of detectors) {
-      try {
-        await this.dockerWorkspaces.execInContainer(
-          containerId, '/', 'test', ['-f', `${containerPath}/${d.file}`],
-        );
-        return d.command;
-      } catch {
-        continue;
-      }
-    }
-    return null;
+  installProjectDependencies(projectId: string, _telegramUserId?: string) {
+    return this.depInstall.installProjectDependencies(projectId);
   }
 
-  async getWorkspaceCredentials(workspaceId: string, _telegramUserId?: string): Promise<{ apiKey: string | null; gitToken: string | null; gitUsername: string | null }> {
-    const ws = await this.prisma.workspace.findUnique({
-      where: { id: workspaceId },
+  // ── Credentials ──────────────────────────────────────────────────────
+
+  getWorkspaceCredentials(workspaceId: string) {
+    return this.crud.getWorkspaceCredentials(workspaceId);
+  }
+
+  async prepareGitAuthEnv(containerId: string, workspaceId: string): Promise<{ gitAuthEnv: Record<string, string>; cleanup: () => Promise<void> }> {
+    const creds = await this.crud.getWorkspaceCredentials(workspaceId);
+    if (!creds.gitToken || !creds.gitUsername) {
+      return { gitAuthEnv: {}, cleanup: async () => {} };
+    }
+    const content = this.dockerWorkspaces.buildCredentialsFileContent({
+      workspaceId, tenantId: '', workDir: '',
+      gitToken: creds.gitToken, gitUsername: creds.gitUsername,
     });
-    if (!ws) return { apiKey: null, gitToken: null, gitUsername: null };
-    const gitToken = ws.gitToken ?? null;
-    const gitUsername = ws.gitUsername ?? null;
-    const apiKey = ws.apiKey ?? null;
-    return { apiKey, gitToken, gitUsername };
+    const credFile = await this.dockerWorkspaces.writeCredentialsFile(containerId, content);
+    const askpass = await this.dockerWorkspaces.writeGitAskpassScript(containerId);
+    return {
+      gitAuthEnv: {
+        CREDENTIALS_FILE: credFile,
+        GIT_ASKPASS: askpass,
+        GIT_TERMINAL_PROMPT: '0',
+        GIT_USERNAME: creds.gitUsername,
+        GIT_TOKEN: creds.gitToken,
+        GITHUB_USER: creds.gitUsername,
+        GITHUB_TOKEN: creds.gitToken,
+      },
+      cleanup: async () => {
+        await this.dockerWorkspaces.removeCredentialsFile(containerId, credFile).catch(() => {});
+        await this.dockerWorkspaces.removeCredentialsFile(containerId, askpass).catch(() => {});
+      },
+    };
   }
-
-  private async execPathExists(containerId: string, path: string): Promise<boolean> {
-    try {
-      await execFileAsync('docker', ['exec', '-i', containerId, 'test', '-d', path]);
-      return true;
-    } catch {
-      try {
-        await execFileAsync('docker', ['exec', '-i', containerId, 'test', '-f', path]);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  }
-
-  async findProjectById(projectId: string) { return this.prisma.workspaceProject.findUnique({ where: { id: projectId } }); }
-  async removeProject(projectId: string) { const project = await this.prisma.workspaceProject.findUnique({ where: { id: projectId } }); if (!project) throw new NotFoundException(`Project ${projectId} not found`); return this.prisma.workspaceProject.delete({ where: { id: projectId } }); }
-  async getProjects(workspaceId: string) { return this.prisma.workspaceProject.findMany({ where: { workspaceId, enabled: true }, orderBy: { name: 'asc' } }); }
 }

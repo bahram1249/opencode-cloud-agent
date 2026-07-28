@@ -32,6 +32,7 @@ export class TelegramCommandHandler {
       workspaceService: this.workspaceService,
       sessionService: this.sessionService,
       miniAppUrl: this.configService.get<string>('app.miniAppUrl', ''),
+      refWs: (wsId: string) => this.workspaceHandler.refWs(wsId),
     };
   }
 

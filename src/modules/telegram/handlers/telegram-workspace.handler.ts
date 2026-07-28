@@ -132,9 +132,10 @@ export class TelegramWorkspaceHandler {
               chatId,
               'Usage: /workspace provider <provider-id> <api-key>\n' +
               'Common providers:\n' +
-              '  opencode    — OpenCode Zen/Go (get key at https://opencode.ai/auth)\n' +
-              '  openai      — OpenAI models\n' +
-              '  anthropic   — Anthropic Claude\n' +
+              '  opencode      — OpenCode Zen (pay-as-you-go, https://opencode.ai/auth)\n' +
+              '  opencode-go   — OpenCode Go (subscription, https://opencode.ai/auth)\n' +
+              '  openai        — OpenAI models\n' +
+              '  anthropic     — Anthropic Claude\n' +
               '  github-copilot — GitHub Copilot\n' +
               'Example: /workspace provider opencode sk-opencode-xxx',
             );
@@ -441,13 +442,14 @@ export class TelegramWorkspaceHandler {
     const currentProvider = ws?.providerId ?? 'none';
     const wsRef = this.refWs(workspaceId);
 
-    const providers = ['opencode', 'openai', 'anthropic', 'github-copilot'];
+    const providers = ['opencode', 'opencode-go', 'openai', 'anthropic', 'github-copilot'];
     const rows: Array<Array<ReturnType<typeof Markup.button.callback>>> = [];
     for (const p of providers) {
       const pickKey = String(++this.pickProviderCounter);
       this.pickProviderStore.set(pickKey, { workspaceId, providerId: p });
       rows.push([Markup.button.callback(
-        p === 'opencode' ? '🔵 OpenCode Zen/Go' :
+        p === 'opencode' ? '🔵 OpenCode Zen' :
+        p === 'opencode-go' ? '🟢 OpenCode Go' :
         p === 'openai' ? '🟢 OpenAI' :
         p === 'anthropic' ? '🟣 Anthropic Claude' : '⚫ GitHub Copilot',
         cb('ws:pickprovider', pickKey),
@@ -469,6 +471,7 @@ export class TelegramWorkspaceHandler {
     if (!entry) return;
     this.pickProviderStore.delete(value);
     const { workspaceId, providerId } = entry;
+    const wsRef = this.refWs(workspaceId);
     this.pendingApiKeyInput.set(`${chatId}:${userId}`, { workspaceId, providerId });
 
     await this.notificationService.editMessage(
@@ -480,7 +483,7 @@ export class TelegramWorkspaceHandler {
           : `Get it from the ${providerId} dashboard`
       }\n\nSend the API key as a message.`,
       Markup.inlineKeyboard([
-        [Markup.button.callback('🔙 Settings', cb('ws:setting:back', workspaceId))],
+        [Markup.button.callback('🔙 Settings', cb('ws:setting:back', wsRef))],
       ]),
     );
   }
@@ -495,7 +498,24 @@ export class TelegramWorkspaceHandler {
     this.pendingApiKeyInput.delete(key);
     try {
       await this.workspaceService.configureProvider(pending.workspaceId, userId, pending.providerId, text);
-      await this.notificationService.sendRaw(chatId, `✅ Provider "${pending.providerId}" configured.`);
+      const ws = await this.workspaceService.findById(pending.workspaceId, userId);
+      if (ws) {
+        await this.notificationService.sendRaw(
+          chatId,
+          `✅ Provider "${pending.providerId}" configured for "${ws.name}".\n\nOpen workspace settings:`,
+        );
+        const wsRef = this.refWs(pending.workspaceId);
+        const text = `🔵 *Provider Updated*\nWorkspace: *${ws.name}*\nProvider: *${pending.providerId}*\n\nOpen settings to change model or manage projects.`;
+        await this.notificationService.sendRawWithKeyboard(
+          chatId,
+          text,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('⚙️ Workspace Settings', cb('ws:show', wsRef))],
+          ]),
+        );
+      } else {
+        await this.notificationService.sendRaw(chatId, `✅ Provider "${pending.providerId}" configured.`);
+      }
     } catch (err) {
       await this.notificationService.sendRaw(chatId, `❌ Provider config failed: ${(err as Error).message}`);
     }

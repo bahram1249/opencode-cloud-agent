@@ -273,9 +273,8 @@ export class SessionService {
         'Docker container is not available. Workspace containers must be enabled to run sessions.',
       );
     }
-    const spawnCommand = 'docker';
-    const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
-    const execEnv = this.dockerWorkspaces.buildProviderEnv({
+
+    const spec = {
       workspaceId: workspace.id,
       tenantId: workspace.tenantId,
       workDir: workspace.workDir,
@@ -284,7 +283,24 @@ export class SessionService {
       model: dto.model ?? workspace.model,
       gitToken: creds.gitToken,
       gitUsername: creds.gitUsername,
-    });
+    };
+
+    const spawnCommand = 'docker';
+    const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
+
+    // Write encrypted credentials as temp file instead of env vars
+    let credFilePath: string | undefined;
+    let askpassPath: string | undefined;
+    const credFileContent = this.dockerWorkspaces.buildCredentialsFileContent(spec);
+    if (credFileContent) {
+      credFilePath = await this.dockerWorkspaces.writeCredentialsFile(ensuredContainerId, credFileContent);
+      askpassPath = await this.dockerWorkspaces.writeGitAskpassScript(ensuredContainerId);
+    }
+
+    const execEnv: Record<string, string> = {};
+    if (credFilePath) execEnv.CREDENTIALS_FILE = credFilePath;
+    if (askpassPath) execEnv.GIT_ASKPASS = askpassPath;
+
     const spawnArgs = this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs, execEnv);
     const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
       name: 'xterm-color',
@@ -292,6 +308,16 @@ export class SessionService {
       rows: 40,
       cwd: workspace.workDir,
       env: { ...process.env, TERM: 'xterm-256color' },
+    });
+
+    // Cleanup credentials file when session exits
+    ptyProcess.onExit(() => {
+      if (credFilePath) {
+        this.dockerWorkspaces.removeCredentialsFile(ensuredContainerId, credFilePath).catch(() => {});
+      }
+      if (askpassPath) {
+        this.dockerWorkspaces.removeCredentialsFile(ensuredContainerId, askpassPath).catch(() => {});
+      }
     });
 
     const terminal = new Terminal({ cols: 120, rows: 40, allowProposedApi: true });
@@ -399,7 +425,7 @@ export class SessionService {
         }
         const spawnCommand = 'docker';
         const creds = await this.workspaceService.getWorkspaceCredentials(workspace.id);
-        const execEnv = this.dockerWorkspaces.buildProviderEnv({
+        const spec = {
           workspaceId: workspace.id,
           tenantId: workspace.tenantId,
           workDir: workspace.workDir,
@@ -408,7 +434,14 @@ export class SessionService {
           model: workspace.model,
           gitToken: creds.gitToken,
           gitUsername: creds.gitUsername,
-        });
+        };
+        let credFilePath: string | undefined;
+        const credContent = this.dockerWorkspaces.buildCredentialsFileContent(spec);
+        if (credContent) {
+          credFilePath = await this.dockerWorkspaces.writeCredentialsFile(workspace.containerId, credContent);
+        }
+        const execEnv: Record<string, string> = {};
+        if (credFilePath) execEnv.CREDENTIALS_FILE = credFilePath;
         const spawnArgs = this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text], execEnv);
         const newPty = pty.spawn(spawnCommand, spawnArgs, {
           name: 'xterm-color',
@@ -440,6 +473,9 @@ export class SessionService {
           session.running = false;
           session.emitter.emit('exit', exitCode, Date.now() - session.startedAt);
           this.logger.log(`Session ${session.publicId} follow-up PTY exited (code: ${exitCode})`);
+          if (credFilePath && workspace.containerId) {
+            this.dockerWorkspaces.removeCredentialsFile(workspace.containerId, credFilePath).catch(() => {});
+          }
         });
 
         this.logger.log(

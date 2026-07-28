@@ -2,9 +2,10 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
-import { execFile, type ExecFileException } from 'node:child_process';
+import { execFile, spawn, type ExecFileException } from 'node:child_process';
 import { promisify } from 'node:util';
 import { platform } from 'node:os';
+import { randomUUID } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 
@@ -255,6 +256,83 @@ export class DockerWorkspaceService {
     return ['exec', '-w', containerCwd, ...envArgs, containerId, command, ...args];
   }
 
+  // ── Secure Credential File Management ─────────────────────────────
+
+  async writeCredentialsFile(containerId: string, content: string): Promise<string> {
+    const filePath = `/tmp/opencode-creds-${randomUUID()}`;
+    return new Promise<string>((resolvePromise, reject) => {
+      const proc = spawn('docker', ['exec', '-i', containerId, 'sh', '-c',
+        `cat > '${filePath.replace(/'/g, "'\\''")}' && chmod 600 '${filePath.replace(/'/g, "'\\''")}'`]);
+      let err = '';
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0) resolvePromise(filePath);
+        else reject(new Error(`writeCredentialsFile failed (${code}): ${err}`));
+      });
+      proc.stdin.write(content);
+      proc.stdin.end();
+    });
+  }
+
+  async removeCredentialsFile(containerId: string, filePath: string): Promise<void> {
+    try {
+      await execFileAsync('docker', [
+        'exec', containerId, 'rm', '-f', filePath,
+      ]);
+    } catch {
+      // non-fatal
+    }
+  }
+
+  async writeGitAskpassScript(containerId: string): Promise<string> {
+    const scriptPath = '/tmp/git-askpass.sh';
+    const script = `#!/bin/sh
+CRED_FILE="\${CREDENTIALS_FILE:-}"
+if [ -z "$CRED_FILE" ] || [ ! -f "$CRED_FILE" ]; then
+  exit 1
+fi
+case "$1" in
+  *Username*)
+    grep "^GIT_USERNAME=" "$CRED_FILE" | cut -d= -f2-
+    ;;
+  *)
+    grep "^GIT_TOKEN=" "$CRED_FILE" | cut -d= -f2-
+    ;;
+esac
+`;
+    return new Promise<string>((resolvePromise, reject) => {
+      const proc = spawn('docker', ['exec', '-i', containerId, 'sh', '-c',
+        `cat > '${scriptPath.replace(/'/g, "'\\''")}' && chmod 500 '${scriptPath.replace(/'/g, "'\\''")}'`]);
+      let err = '';
+      proc.stderr.on('data', (d: Buffer) => { err += d.toString(); });
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code === 0) resolvePromise(scriptPath);
+        else reject(new Error(`writeGitAskpassScript failed (${code}): ${err}`));
+      });
+      proc.stdin.write(script);
+      proc.stdin.end();
+    });
+  }
+
+  buildCredentialsFileContent(spec: WorkspaceContainerSpec): string {
+    const lines: string[] = [];
+    if (spec.gitToken) {
+      lines.push(`GIT_TOKEN=${spec.gitToken}`);
+      lines.push(`GITHUB_TOKEN=${spec.gitToken}`);
+      if (spec.gitUsername) {
+        lines.push(`GIT_USERNAME=${spec.gitUsername}`);
+        lines.push(`GITHUB_USER=${spec.gitUsername}`);
+      }
+    }
+    if (spec.providerId && spec.apiKey) {
+      const id = spec.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_');
+      lines.push(`${id}_API_KEY=${spec.apiKey}`);
+    }
+    return lines.join('\n');
+  }
+
   resolveProjectContainerPath(projectPath: string): string {
     return projectPath === '.' ? '/workspace' : `/workspace/${projectPath}`.replace(/\\/g, '/').replace(/\/+/g, '/');
   }
@@ -273,25 +351,12 @@ export class DockerWorkspaceService {
   private writeOpenCodeConfig(spec: WorkspaceContainerSpec): void {
     const config: Record<string, unknown> = { $schema: 'https://opencode.ai/config.json' };
     if (spec.model) config.model = spec.model;
-    if (spec.providerId) config.provider = { [spec.providerId]: {} };
+    if (spec.providerId) {
+      const providerOptions: Record<string, unknown> = {};
+      if (spec.apiKey) providerOptions.apiKey = spec.apiKey;
+      config.provider = { [spec.providerId]: { options: providerOptions } };
+    }
     writeFileSync(join(spec.workDir, 'opencode.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  }
-
-  buildProviderEnv(spec: WorkspaceContainerSpec): Record<string, string> {
-    const env: Record<string, string> = {};
-    if (spec.gitToken) {
-      env.GIT_TOKEN = spec.gitToken;
-      env.GITHUB_TOKEN = spec.gitToken;
-      if (spec.gitUsername) {
-        env.GIT_USERNAME = spec.gitUsername;
-        env.GITHUB_USER = spec.gitUsername;
-      }
-    }
-    if (spec.providerId && spec.apiKey) {
-      const id = spec.providerId.toUpperCase().replace(/[^A-Z0-9]/g, '_');
-      env[`${id}_API_KEY`] = spec.apiKey;
-    }
-    return env;
   }
 
   private async checkDockerCli(): Promise<boolean> {

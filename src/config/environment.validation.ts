@@ -84,6 +84,10 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   MINI_APP_URL?: string;
+
+  @IsString()
+  @IsOptional()
+  ENCRYPTION_KEY?: string;
 }
 
 /**

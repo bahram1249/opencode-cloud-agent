@@ -618,7 +618,7 @@
       html += '<div class="form-group">'
         + '<label class="form-label">Provider</label>'
         + '<select class="form-input" id="provider-select" onchange="onProviderChange(\'' + id + '\')">';
-      var providers = ['', 'opencode', 'openai', 'anthropic', 'github-copilot'];
+      var providers = ['', 'opencode', 'opencode-go', 'openai', 'anthropic', 'github-copilot'];
       for (var pi = 0; pi < providers.length; pi++) {
         var pv = providers[pi];
         html += '<option value="' + pv + '"' + (ws.providerId === pv ? ' selected' : '') + '>' + (pv || 'None') + '</option>';
@@ -660,22 +660,41 @@
 
       // Git Credentials
       html += '<div class="card anim-slide-up" style="animation-delay:0.15s">'
-        + '<h3>Git Credentials</h3>';
+        + '<h3>Credentials</h3>';
 
       if (gitStatus.isSet) {
         html += '<div class="card-section">'
+          + '<div class="card-section-title">Git</div>'
           + '<div class="card-row"><span class="label">Status</span><span class="value"><span class="badge badge-success">Logged In</span></span></div>'
           + '<div class="card-row"><span class="label">Username</span><span class="value">' + esc(gitStatus.username || '') + '</span></div>'
           + '<div class="card-row"><span class="label">Token</span><span class="value" style="font-family:var(--font-mono);font-size:13px">' + esc(gitStatus.tokenMasked || '') + '</span></div>'
           + '</div>'
           + '<button class="btn btn-danger btn-block" onclick="logoutGit(\'' + id + '\')">Logout Git Credentials</button>';
       } else {
-        html += '<p>Not configured. Add your Git credentials to enable version control operations.</p>'
+        html += '<p>Git: Not configured. Add credentials to enable version control.</p>'
           + '<div class="form-group"><label class="form-label">Username</label><input type="text" class="form-input" id="git-user" placeholder="Git username"></div>'
           + '<div class="form-group"><label class="form-label">Token</label><input type="password" class="form-input" id="git-token" placeholder="Personal access token"></div>'
           + '<div class="form-group"><label class="form-label">Remote URL</label><input type="text" class="form-input" id="git-url" placeholder="https://github.com/org/repo.git"></div>'
-          + '<button class="btn btn-primary btn-block" onclick="saveGitCredentials(\'' + id + '\')">Save Credentials</button>';
+          + '<button class="btn btn-primary btn-block" onclick="saveGitCredentials(\'' + id + '\')">Save Git Credentials</button>';
       }
+
+      // Provider Token section
+      var provLabel = '';
+      if (ws.providerId) {
+        provLabel = 'Provider: <strong>' + esc(ws.providerId) + '</strong>';
+      } else {
+        provLabel = 'No provider configured';
+      }
+      html += '<div class="card-section" style="border-top:1px solid var(--tg-divider, rgba(255,255,255,0.1));padding-top:var(--space-3)">'
+        + '<div class="card-section-title">Provider API Key</div>'
+        + '<div class="card-row"><span class="label">' + provLabel + '</span>'
+        + '<span class="value">' + (gitStatus.providerKeySet ? '<span class="badge badge-success">Key Set</span>' : '<span class="badge badge-neutral">No Key</span>') + '</span></div>'
+        + '<div class="form-group" style="margin-top:var(--space-2)">'
+        + '  <input type="password" class="form-input" id="provider-apikey" placeholder="Enter API key for ' + esc(ws.providerId || 'provider') + '" value="">'
+        + '</div>'
+        + '<button class="btn btn-primary btn-block" onclick="saveProviderApiKey(\'' + id + '\',this)">Update Provider Key</button>'
+        + '</div>';
+
       html += '</div>';
 
       // Delete Workspace
@@ -856,6 +875,26 @@
     }).catch(function (e) {
       btn.disabled = false;
       btn.textContent = 'Add Project';
+      showToast(e.message, 'error');
+    });
+  };
+
+  window.saveProviderApiKey = function (id, btn) {
+    var apiKey = document.getElementById('provider-apikey').value.trim();
+    if (!apiKey) { showToast('Please enter an API key', 'warning'); return; }
+    haptic('medium');
+    btn.disabled = true;
+    btn.textContent = 'Saving\u2026';
+    api('/api/workspaces/' + id, {
+      method: 'PATCH',
+      body: JSON.stringify({ apiKey: apiKey }),
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function () {
+      showToast('Provider API key updated', 'success');
+      renderWorkspaceSettings(id);
+    }).catch(function (e) {
+      btn.disabled = false;
+      btn.textContent = 'Update Provider Key';
       showToast(e.message, 'error');
     });
   };
