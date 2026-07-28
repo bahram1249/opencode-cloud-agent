@@ -233,9 +233,10 @@ export class TelegramGitHandler {
         }
         case 'git:push': {
           const pushWs = await this.workspaceService.findById(project.workspaceId);
+          const pushWsWorkDir = pushWs?.workDir ?? project.gitPath;
           const pushCid = pushWs?.containerId ?? undefined;
           const pushContainerPath = pushCid
-            ? this.workspaceService.resolveContainerPath(project.gitPath, pushWs!.workDir, pushCid) : project.gitPath;
+            ? this.workspaceService.resolveContainerPath(project.gitPath, pushWsWorkDir, pushCid) : project.gitPath;
           let pushEnv: Record<string, string> | undefined;
           let pushCleanup: (() => Promise<void>) | undefined;
           if (pushCid) {
@@ -250,9 +251,10 @@ export class TelegramGitHandler {
         }
         case 'git:pull': {
           const pullWs = await this.workspaceService.findById(project.workspaceId);
+          const pullWsWorkDir = pullWs?.workDir ?? project.gitPath;
           const pullCid = pullWs?.containerId ?? undefined;
           const pullContainerPath = pullCid
-            ? this.workspaceService.resolveContainerPath(project.gitPath, pullWs!.workDir, pullCid) : project.gitPath;
+            ? this.workspaceService.resolveContainerPath(project.gitPath, pullWsWorkDir, pullCid) : project.gitPath;
           let pullEnv: Record<string, string> | undefined;
           let pullCleanup: (() => Promise<void>) | undefined;
           if (pullCid) {

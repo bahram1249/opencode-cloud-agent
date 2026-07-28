@@ -25,6 +25,7 @@ function cleanOutput(sessionId: string, raw: string): string {
   let s = prev + raw;
 
   // Save trailing partial ANSI sequence for next chunk
+   
   // eslint-disable-next-line no-control-regex
   const partialRe = /\x1B\[[\x30-\x3F]*$/;
   const partialMatch = s.match(partialRe);
@@ -84,6 +85,7 @@ function cleanOutput(sessionId: string, raw: string): string {
       if (txt) out.push(openAll() + txt + closeAll());
     } else {
       // SGR sequences end with 'm' — extract params for formatting
+      // eslint-disable-next-line no-control-regex
       const sgr = tok.v.match(/^\x1B\[([\d;]*)m$/);
       if (sgr) {
         const params = sgr[1] ? sgr[1].split(';').map(Number) : [0];

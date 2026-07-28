@@ -2,7 +2,7 @@ import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, relative } from 'node:path';
-import { execFile, spawn, type ExecFileException } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { platform } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -137,7 +137,7 @@ export class DockerWorkspaceService {
     try {
       const stream = await docker.pull(this.image);
       await new Promise<void>((resolvePromise, reject) => {
-        docker.modem.followProgress(stream, (err?: Error) => { err ? reject(err) : resolvePromise(); });
+        docker.modem.followProgress(stream, (err?: Error) => { if (err) reject(err); else resolvePromise(); });
       });
     } catch (err) {
       this.logger.warn(`Could not pull ${this.image}; may use a local image: ${(err as Error).message}`);

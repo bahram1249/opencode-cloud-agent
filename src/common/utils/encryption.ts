@@ -40,7 +40,7 @@ export function encrypt(plaintext: string): string {
 export function decrypt(value: string): string {
   if (!value || !isEncryptionEnabled()) return value;
   try {
-    const payload: EncryptedPayload = JSON.parse(value);
+    const payload = JSON.parse(value) as EncryptedPayload;
     if (!payload.iv || !payload.tag) return value;
     const key = getKey();
     if (!key) return value;

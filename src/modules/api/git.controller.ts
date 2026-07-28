@@ -36,8 +36,8 @@ export class GitController {
     }
 
     const containerId = ws.containerId ?? undefined;
-    const containerPath = containerId
-      ? this.workspaceService.resolveContainerPath(hostPath, ws.workDir, ws.containerId!)
+    const containerPath = containerId && ws.containerId
+      ? this.workspaceService.resolveContainerPath(hostPath, ws.workDir, ws.containerId)
       : hostPath;
 
     return { gitPath: hostPath, containerPath, name: projName, containerId };

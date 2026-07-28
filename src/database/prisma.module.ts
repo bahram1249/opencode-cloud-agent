@@ -1,5 +1,5 @@
 import { Global, Module, Logger } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
 import { encrypt, decrypt, isEncryptionEnabled } from 'src/common/utils/encryption';
 
 const ENCRYPTED_FIELDS = ['gitToken', 'apiKey'] as const;
@@ -22,13 +22,18 @@ export class PrismaService extends PrismaClient {
       Logger.warn('ENCRYPTION_KEY not set — sensitive fields stored in plaintext. Set ENCRYPTION_KEY in production.', 'PrismaService');
     }
 
-    this.$use(async (params, next) => {
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    this.$use(async (params: Prisma.MiddlewareParams, next: (params: Prisma.MiddlewareParams) => Promise<unknown>) => {
       if (params.model !== 'Workspace') return next(params);
 
       if (params.action === 'create' || params.action === 'update') {
-        for (const field of ENCRYPTED_FIELDS) {
-          if (params.args.data?.[field]) {
-            params.args.data[field] = encrypt(params.args.data[field]);
+        const args = params.args as Record<string, unknown>;
+        const data = args.data as Record<string, unknown> | undefined;
+        if (data) {
+          for (const field of ENCRYPTED_FIELDS) {
+            if (data[field]) {
+              data[field] = encrypt(data[field] as string);
+            }
           }
         }
       }

@@ -20,7 +20,7 @@ export class ProjectService {
   async addProject(
     workspaceId: string,
     dto: CreateProjectDto,
-    telegramUserId = 'legacy',
+    _telegramUserId = 'legacy',
     gitAuthEnv?: Record<string, string>,
     gitAuthCleanup?: () => Promise<void>,
   ) {
@@ -33,7 +33,6 @@ export class ProjectService {
       ? this.dockerWorkspaces.toContainerPath(absPath, ws.workDir)
       : absPath;
 
-    let didClone = false;
     if (dto.remoteUrl && !(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
       const target = containerPath === containerWorkDir ? '.' : relPath;
       if (containerId) {
@@ -42,7 +41,6 @@ export class ProjectService {
       } else {
         await this.git.clone(containerWorkDir, dto.remoteUrl, target, containerId);
       }
-      didClone = true;
     }
     if (!(containerId ? await this.execPathExists(containerId, containerPath) : existsSync(containerPath))) {
       throw new BadRequestException(`Path does not exist: ${containerPath}`);

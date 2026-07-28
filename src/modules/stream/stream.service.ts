@@ -125,7 +125,10 @@ export class StreamService {
         { parse_mode: 'HTML', reply_markup: this.liveKeyboard(streamId, sessionPublicId) },
       );
 
-      entryMap.set(streamId, { ...entryMap.get(streamId)!, messageId: msg.message_id });
+      const entry = entryMap.get(streamId);
+      if (entry) {
+        entryMap.set(streamId, { ...entry, messageId: msg.message_id });
+      }
 
       return { messageId: msg.message_id, streamId };
     } catch (err) {

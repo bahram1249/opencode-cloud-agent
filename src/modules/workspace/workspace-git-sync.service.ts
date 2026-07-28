@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { PRISMA_CLIENT } from 'src/database/prisma.module';
 import { existsSync } from 'node:fs';

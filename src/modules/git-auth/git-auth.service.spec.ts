@@ -10,7 +10,7 @@ describe('GitAuthService', () => {
       findUnique: jest.fn(),
       update: jest.fn().mockResolvedValue({}),
     },
-  } as never;
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -62,7 +62,7 @@ describe('GitAuthService', () => {
 
   describe('getCredentialsStatus', () => {
     it('should return not-set status when no credentials', async () => {
-      (mockPrisma as any).workspace.findUnique.mockResolvedValue({
+      mockPrisma.workspace.findUnique.mockResolvedValue({
         name: 'test-ws',
         gitToken: null,
         gitUsername: null,
@@ -75,7 +75,7 @@ describe('GitAuthService', () => {
     });
 
     it('should return set status when credentials exist', async () => {
-      (mockPrisma as any).workspace.findUnique.mockResolvedValue({
+      mockPrisma.workspace.findUnique.mockResolvedValue({
         name: 'test-ws',
         gitToken: 'ghp_abc123def456',
         gitUsername: 'testuser',

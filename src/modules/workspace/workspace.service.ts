@@ -1,6 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+
 import { ConfigService } from '@nestjs/config';
 import { GitCommandsService } from 'src/modules/git-commands/git-commands.service';
 import { DockerWorkspaceService } from './docker-workspace.service';
@@ -70,7 +69,7 @@ export class WorkspaceService {
     const result = await this.crud.configureProvider(workspaceId, telegramUserId, providerId, apiKey);
     const ws = await this.crud.findById(workspaceId, telegramUserId);
     if (ws?.containerId) {
-      await this.syncProjects(workspaceId, telegramUserId).catch((err) =>
+      await this.syncProjects(workspaceId, telegramUserId).catch((err: unknown) =>
         { this.logger.warn(`Background sync after configureProvider failed: ${(err as Error).message}`); },
       );
     }
@@ -81,7 +80,7 @@ export class WorkspaceService {
     const updated = await this.crud.setDefaultModel(workspaceId, telegramUserId, model);
     const ws = await this.crud.findById(workspaceId, telegramUserId);
     if (ws?.containerId) {
-      await this.syncProjects(workspaceId, telegramUserId).catch((err) =>
+      await this.syncProjects(workspaceId, telegramUserId).catch((err: unknown) =>
         { this.logger.warn(`Background sync after setDefaultModel failed: ${(err as Error).message}`); },
       );
     }
@@ -163,7 +162,7 @@ export class WorkspaceService {
 
     const project = await this.projectService.addProject(workspaceId, dto, telegramUserId, gitAuthEnv, cleanup);
     if (dto.remoteUrl && project.autoInstall && containerId) {
-      this.depInstall.installProjectDependencies(project.id).catch((err) =>
+      this.depInstall.installProjectDependencies(project.id).catch((err: unknown) =>
         { this.logger.warn(`Auto-install failed for ${project.name}: ${(err as Error).message}`); },
       );
     }
