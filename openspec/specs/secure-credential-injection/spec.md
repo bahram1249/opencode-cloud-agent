@@ -11,7 +11,8 @@ The system SHALL inject credentials into Docker containers via temporary files w
 - **WHEN** a container is being ensured or a docker exec command is prepared
 - **THEN** the system SHALL write a credentials file to `/tmp/opencode-creds-<uuid>` inside the container using `docker exec -i sh -c "cat > /tmp/opencode-creds-<uuid>"`
 - **AND** SHALL set file permissions to `0o600`
-- **AND** SHALL set the environment variable `CREDENTIALS_FILE=/tmp/opencode-creds-<uuid>` instead of individual `-e GIT_TOKEN=xxx` flags
+- **AND** SHALL set the environment variable `CREDENTIALS_FILE=/tmp/opencode-creds-<uuid>` as the primary auth mechanism
+- **AND** MAY also pass individual `-e GIT_TOKEN=xxx`, `-e GIT_USERNAME=xxx`, `-e GITHUB_TOKEN=xxx`, `-e GITHUB_USER=xxx` flags for backward compatibility — these are redundant when `CREDENTIALS_FILE` + `GIT_ASKPASS` are used
 
 #### Scenario: Credentials file format
 - **WHEN** the credentials file is written inside the container

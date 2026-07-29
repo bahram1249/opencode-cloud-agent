@@ -20,7 +20,8 @@ The system SHALL encrypt `gitToken` and `apiKey` fields on the `Workspace` Prism
 #### Scenario: Encryption key from environment
 - **WHEN** the application starts
 - **THEN** the system SHALL read `ENCRYPTION_KEY` from the environment
-- **AND** SHALL fail fast with a clear error if the key is missing or not the correct length (32 bytes hex-encoded)
+- **AND** if the key is missing or not the correct length (32 bytes hex-encoded), the system SHALL log a warning that sensitive fields will be stored in plaintext
+- **AND** SHALL continue in degraded mode (plaintext pass-through) rather than failing to start
 
 #### Scenario: Authenticated encryption with integrity
 - **WHEN** encrypting a field
@@ -33,9 +34,9 @@ Both the Telegram Bot and Mini App SHALL transparently use the encrypted credent
 #### Scenario: Bot stores encrypted credentials
 - **WHEN** a user runs `/git login <username> <token>` via the Telegram Bot
 - **THEN** the token SHALL be encrypted by middleware before storage
-- **AND** the bot SHALL display `Token: (encrypted)` in the credential status response
+- **AND** the bot SHALL display the masked token (first 4 + `****` + last 4) in the credential status response
 
 #### Scenario: Mini App stores encrypted credentials
 - **WHEN** a user saves git credentials via the Mini App workspace settings
 - **THEN** the token SHALL be encrypted by middleware before storage
-- **AND** the Mini App SHALL display "Token encrypted at rest" in the credential status section
+- **AND** the Mini App SHALL display the masked token (first 4 + `****` + last 4) in the credential status section
