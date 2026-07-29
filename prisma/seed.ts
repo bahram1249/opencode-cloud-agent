@@ -3,10 +3,17 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
+  const tenant = await prisma.tenant.upsert({
+    where: { telegramUserId: 'legacy' },
+    update: {},
+    create: { telegramUserId: 'legacy', displayName: 'Legacy tenant' },
+  });
+
   const workspace = await prisma.workspace.upsert({
-    where: { name: 'default' },
+    where: { tenantId_name: { tenantId: tenant.id, name: 'default' } },
     update: {},
     create: {
+      tenantId: tenant.id,
       name: 'default',
       workDir: process.env['DEFAULT_WORKSPACE_PATH'] ?? process.cwd(),
       active: true,
@@ -20,11 +27,7 @@ async function main(): Promise<void> {
     const repoPath = process.env['DEFAULT_REPO_PATH'];
     if (repoPath) {
       await prisma.workspaceProject.create({
-        data: {
-          workspaceId: workspace.id,
-          name: 'default',
-          gitPath: repoPath,
-        },
+        data: { workspaceId: workspace.id, name: 'default', gitPath: repoPath, path: '.' },
       });
       console.log('Added default project:', repoPath);
     }

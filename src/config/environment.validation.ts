@@ -27,10 +27,8 @@ export class EnvironmentVariables {
   BOT_TOKEN!: string;
 
   @IsString()
-  AUTHORIZED_USERS!: string;
-
-  @IsString()
-  OPENCODE_PATH!: string;
+  @IsOptional()
+  AUTHORIZED_USERS?: string;
 
   @IsString()
   @IsOptional()
@@ -39,9 +37,6 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   GITHUB_TOKEN?: string;
-
-  @IsString()
-  DEFAULT_REPOSITORY!: string;
 
   @IsNumber()
   @Min(1)
@@ -69,6 +64,30 @@ export class EnvironmentVariables {
   @Min(0)
   @IsOptional()
   TASK_TIMEOUT_MS?: number;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_ROOT?: string;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_IMAGE?: string;
+
+  @IsString()
+  @IsOptional()
+  DOCKER_SOCKET?: string;
+
+  @IsString()
+  @IsOptional()
+  WORKSPACE_CONTAINERS_ENABLED?: string;
+
+  @IsString()
+  @IsOptional()
+  MINI_APP_URL?: string;
+
+  @IsString()
+  @IsOptional()
+  ENCRYPTION_KEY?: string;
 }
 
 /**

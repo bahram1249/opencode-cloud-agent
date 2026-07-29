@@ -2,7 +2,6 @@ import { Injectable, Logger, type OnModuleInit, type OnModuleDestroy } from '@ne
 import { TelegramBotService } from './telegram-bot.service';
 import { TelegramCommandHandler } from './telegram-command.handler';
 import { TelegramAuthGuard } from 'src/common/guards/telegram-auth.guard';
-import { NotificationService } from 'src/modules/notification/notification.service';
 import type { Update } from 'telegraf/types';
 import type { Context } from 'telegraf';
 
@@ -14,7 +13,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private readonly botService: TelegramBotService,
     private readonly handler: TelegramCommandHandler,
     private readonly guard: TelegramAuthGuard,
-    private readonly notificationService: NotificationService,
   ) {}
 
   onModuleInit(): void {
@@ -83,6 +81,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     bot.command('sessions', async (ctx) => {
       if (!this.isAuthorized(ctx.from?.id)) return;
       await this.handler.handleSessionsCmd(this.toContext(ctx));
+    });
+
+    // ── Setup Wizard ───────────────────────────────────────────────
+    bot.command('setup', async (ctx) => {
+      if (!this.isAuthorized(ctx.from?.id)) return;
+      await this.handler.handleSetupCmd(this.toContext(ctx), this.getArgs(ctx));
     });
 
     // ── Git ────────────────────────────────────────────────────────
@@ -170,9 +174,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       const chatId = String(ctx.chat?.id ?? 0);
       const userId = String(ctx.from?.id ?? 0);
+      const messageId = ctx.callbackQuery && 'message' in ctx.callbackQuery && ctx.callbackQuery.message
+        ? (ctx.callbackQuery.message as { message_id?: number }).message_id ?? 0
+        : 0;
 
-      // Route all structured callbacks through the handler
-      await this.handler.handleCallback(chatId, userId, data);
+      await this.handler.handleCallback(chatId, userId, messageId, data);
       await ctx.answerCbQuery().catch(() => {});
     });
   }

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>OpenCode Orchestrator</title>
+  <meta name="theme-color" content="#0d1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/mini-app/assets/xterm.css">
+  <link rel="stylesheet" href="/mini-app/assets/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <!-- Toast notifications container -->
+  <div id="toast-container" role="alert" aria-live="polite"></div>
+
+  <!-- Desktop top navbar -->
+  <header id="navbar" class="top-nav">
+    <div class="navbar-brand">
+      <svg class="navbar-logo" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+      <span class="navbar-title">OpenCode</span>
+    </div>
+    <div class="navbar-links">
+      <a href="#dashboard" class="nav-link" data-route="dashboard">Dashboard</a>
+      <a href="#workspaces" class="nav-link" data-route="workspaces">Workspaces</a>
+      <a href="#sessions" class="nav-link" data-route="sessions">Sessions</a>
+    </div>
+    <span class="nav-user" id="navUser"></span>
+  </header>
+
+  <!-- Main application container -->
+  <main id="app">
+    <div class="loading-screen">
+      <div class="loading-spinner"></div>
+    </div>
+  </main>
+
+  <!-- Mobile bottom navigation -->
+  <nav id="bottom-nav" class="bottom-nav" role="tablist">
+    <a href="#dashboard" class="nav-item" data-route="dashboard" role="tab" aria-label="Dashboard">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1"/>
+        <rect x="14" y="3" width="7" height="7" rx="1"/>
+        <rect x="3" y="14" width="7" height="7" rx="1"/>
+        <rect x="14" y="14" width="7" height="7" rx="1"/>
+      </svg>
+      <span class="nav-label">Dashboard</span>
+    </a>
+    <a href="#workspaces" class="nav-item" data-route="workspaces" role="tab" aria-label="Workspaces">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      <span class="nav-label">Workspaces</span>
+    </a>
+    <a href="#sessions" class="nav-item" data-route="sessions" role="tab" aria-label="Sessions">
+      <svg class="nav-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+      <span class="nav-label">Sessions</span>
+    </a>
+  </nav>
+
+  <!-- Bottom sheet modal -->
+  <div id="sheet-overlay" class="sheet-overlay" style="display:none"></div>
+  <div id="bottom-sheet" class="bottom-sheet" style="display:none">
+    <div class="sheet-indicator"></div>
+    <div class="sheet-header">
+      <h3 class="sheet-title" id="sheet-title"></h3>
+      <button class="sheet-close" id="sheet-close" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sheet-body" id="sheet-body"></div>
+  </div>
+
+  <!-- External scripts -->
+  <script src="/mini-app/assets/xterm.js"></script>
+  <script src="/mini-app/assets/socket.io.js"></script>
+  <script src="/mini-app/assets/app.js?v=7"></script>
+</body>
+</html>

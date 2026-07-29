@@ -51,6 +51,39 @@ export class NotificationService {
     }
   }
 
+  /** Edit an existing message (text + optional keyboard). */
+  async editMessage(
+    chatId: string,
+    messageId: number,
+    text: string,
+    keyboard?: ReturnType<typeof Markup.inlineKeyboard>,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.telegram.editMessageText(chatId, messageId, undefined, text, {
+        ...(keyboard ? { reply_markup: keyboard.reply_markup } : {}),
+      });
+    } catch (err) {
+      this.logger.error(`Failed to edit message: ${(err as Error).message}`);
+    }
+  }
+
+  /** Edit only the reply markup (keyboard) of an existing message. */
+  async editKeyboard(
+    chatId: string,
+    messageId: number,
+    keyboard: ReturnType<typeof Markup.inlineKeyboard>,
+  ): Promise<void> {
+    if (!this.bot) return;
+    try {
+      await this.bot.telegram.editMessageReplyMarkup(chatId, messageId, undefined, {
+        reply_markup: keyboard.reply_markup,
+      } as never);
+    } catch (err) {
+      this.logger.error(`Failed to edit keyboard: ${(err as Error).message}`);
+    }
+  }
+
   /** Send a raw text message with an inline keyboard. */
   async sendRawWithKeyboard(
     chatId: string,
@@ -58,14 +91,10 @@ export class NotificationService {
     keyboard: ReturnType<typeof Markup.inlineKeyboard>,
   ): Promise<void> {
     if (!this.bot) return;
-    try {
-      await this.bot.telegram.sendMessage(chatId, text, {
-         
-        reply_markup: keyboard.reply_markup as never,
-      });
-    } catch (err) {
-      this.logger.error(`Failed to send message with keyboard: ${(err as Error).message}`);
-    }
+    await this.bot.telegram.sendMessage(chatId, text, {
+      
+      reply_markup: keyboard.reply_markup as never,
+    });
   }
 
   private formatMessage(payload: NotificationPayload, emoji: string): string {

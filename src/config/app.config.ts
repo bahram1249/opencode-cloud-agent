@@ -1,6 +1,38 @@
 import { registerAs } from '@nestjs/config';
 import { execSync } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
+import { platform, homedir } from 'node:os';
+import { join } from 'node:path';
 import { LogLevel, parseAuthorizedUsers } from './environment.validation';
+
+function defaultWorkspaceRoot(): string {
+  const env = process.env['WORKSPACE_ROOT'];
+  if (env) {
+    try {
+      mkdirSync(env, { recursive: true });
+    } catch {
+      // non-fatal — workspace creation will fail with a clear error if the dir isn't writable
+    }
+    return env;
+  }
+  let root: string;
+  switch (platform()) {
+    case 'win32':
+      root = join(process.env['APPDATA'] || join(homedir(), 'AppData', 'Local'), 'opencode-orchestrator', 'workspaces');
+      break;
+    case 'darwin':
+      root = join(homedir(), 'Library', 'Application Support', 'opencode-orchestrator', 'workspaces');
+      break;
+    default:
+      root = join(homedir(), '.local', 'share', 'opencode-orchestrator', 'workspaces');
+  }
+  try {
+    mkdirSync(root, { recursive: true });
+  } catch {
+    // non-fatal — workspace creation will fail with a clear error if the dir isn't writable
+  }
+  return root;
+}
 
 function resolveBinary(name: string): string {
   if (name.includes('/')) return name;
@@ -28,6 +60,11 @@ export interface AppConfig {
   maxConcurrentTasks: number;
   taskTimeoutMs: number;
   authorizedUsers: Set<number>;
+  workspaceRoot: string;
+  workspaceImage: string;
+  dockerSocket: string;
+  workspaceContainersEnabled: boolean;
+  miniAppUrl: string;
 }
 
 export const APP_CONFIG = 'APP_CONFIG';
@@ -47,5 +84,10 @@ export const appConfig = registerAs('app', (): AppConfig => {
     maxConcurrentTasks: Number(process.env['MAX_CONCURRENT_TASKS'] ?? 3),
     taskTimeoutMs: Number(process.env['TASK_TIMEOUT_MS'] ?? 1800000),
     authorizedUsers: parseAuthorizedUsers(authorizedUsersRaw),
+    workspaceRoot: defaultWorkspaceRoot(),
+    workspaceImage: process.env['WORKSPACE_IMAGE'] ?? 'opencode-cloud-agent/workspace:latest',
+    dockerSocket: process.env['DOCKER_SOCKET'] ?? '/var/run/docker.sock',
+    workspaceContainersEnabled: process.env['WORKSPACE_CONTAINERS_ENABLED'] !== 'false',
+    miniAppUrl: process.env['MINI_APP_URL'] ?? (process.env['WEBHOOK_DOMAIN'] ? `${process.env['WEBHOOK_DOMAIN']}/mini-app` : `http://localhost:${process.env['PORT'] ?? 3000}/mini-app`),
   };
 });

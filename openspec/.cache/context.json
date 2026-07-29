@@ -1,0 +1,150 @@
+{
+  "stack": {
+    "languages": [
+      {
+        "name": "JSON",
+        "fileCount": 5,
+        "lineCount": 10877,
+        "percentage": 33
+      },
+      {
+        "name": "JavaScript",
+        "fileCount": 4,
+        "lineCount": 9129,
+        "percentage": 28
+      },
+      {
+        "name": "TypeScript",
+        "fileCount": 67,
+        "lineCount": 6677,
+        "percentage": 21
+      },
+      {
+        "name": "Markdown",
+        "fileCount": 51,
+        "lineCount": 5505,
+        "percentage": 17
+      },
+      {
+        "name": "CSS",
+        "fileCount": 2,
+        "lineCount": 252,
+        "percentage": 1
+      },
+      {
+        "name": "YAML",
+        "fileCount": 13,
+        "lineCount": 52,
+        "percentage": 0
+      },
+      {
+        "name": "HTML",
+        "fileCount": 1,
+        "lineCount": 23,
+        "percentage": 0
+      }
+    ],
+    "frameworks": [
+      "NestJS"
+    ],
+    "packageManager": "npm",
+    "buildTools": [
+      "TypeScript"
+    ],
+    "testFramework": "Jest"
+  },
+  "structure": {
+    "rootFiles": [
+      "AGENTS.md",
+      "Dockerfile",
+      "README.md",
+      "docker-compose.yml",
+      "docker-workspace-build.txt",
+      "eslint.config.mjs",
+      "nest-cli.json",
+      "package-lock.json",
+      "package.json",
+      "tsconfig.json"
+    ],
+    "mainDirectories": [
+      {
+        "name": "dist",
+        "purpose": "构建输出",
+        "fileCount": 199,
+        "path": "dist"
+      },
+      {
+        "name": "src",
+        "purpose": "源代码",
+        "fileCount": 64,
+        "path": "src"
+      },
+      {
+        "name": "openspec",
+        "purpose": "项目目录",
+        "fileCount": 63,
+        "path": "openspec"
+      },
+      {
+        "name": "prisma",
+        "purpose": "项目目录",
+        "fileCount": 12,
+        "path": "prisma"
+      },
+      {
+        "name": "mini-app-assets",
+        "purpose": "项目目录",
+        "fileCount": 6,
+        "path": "mini-app-assets"
+      },
+      {
+        "name": "docker",
+        "purpose": "项目目录",
+        "fileCount": 3,
+        "path": "docker"
+      },
+      {
+        "name": "scripts",
+        "purpose": "脚本",
+        "fileCount": 1,
+        "path": "scripts"
+      },
+      {
+        "name": "test",
+        "purpose": "测试文件",
+        "fileCount": 1,
+        "path": "test"
+      }
+    ],
+    "entryPoints": [
+      "src/main.ts"
+    ]
+  },
+  "patterns": {
+    "architecture": "standard",
+    "codeStyle": [
+      "Prettier",
+      "TypeScript"
+    ],
+    "conventions": [
+      "GitHub workflows",
+      "OpenSpec"
+    ]
+  },
+  "stats": {
+    "totalFiles": 162,
+    "totalLines": 32515,
+    "byLanguage": {
+      "JSON": 10877,
+      "JavaScript": 9129,
+      "TypeScript": 6677,
+      "Markdown": 5505,
+      "CSS": 252,
+      "YAML": 52,
+      "HTML": 23
+    }
+  },
+  "analyzedAt": "2026-07-21T14:42:15.425Z",
+  "projectRoot": "/Users/bahram/Public/Code/nestjs/ai-prompt/opencode-orchestrator",
+  "projectName": "opencode-orchestrator"
+}

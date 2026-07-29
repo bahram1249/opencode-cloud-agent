@@ -13,6 +13,7 @@ import { Terminal } from '@xterm/headless';
 import type { CreateSessionDto } from './dto/session.dto';
 import { AppEvents } from 'src/common/constants/workflow.constants';
 import { WorkspaceService } from '../workspace/workspace.service';
+import { DockerWorkspaceService } from '../workspace/docker-workspace.service';
 
 // Buffer unfinished ANSI sequences across PTY data chunks
 const rawBuffer = new Map<string, string>();
@@ -24,6 +25,7 @@ function cleanOutput(sessionId: string, raw: string): string {
   let s = prev + raw;
 
   // Save trailing partial ANSI sequence for next chunk
+   
   // eslint-disable-next-line no-control-regex
   const partialRe = /\x1B\[[\x30-\x3F]*$/;
   const partialMatch = s.match(partialRe);
@@ -83,6 +85,7 @@ function cleanOutput(sessionId: string, raw: string): string {
       if (txt) out.push(openAll() + txt + closeAll());
     } else {
       // SGR sequences end with 'm' — extract params for formatting
+      // eslint-disable-next-line no-control-regex
       const sgr = tok.v.match(/^\x1B\[([\d;]*)m$/);
       if (sgr) {
         const params = sgr[1] ? sgr[1].split(';').map(Number) : [0];
@@ -185,11 +188,12 @@ export class SessionService {
     @Inject(PRISMA_CLIENT) private readonly prisma: PrismaClient,
     private readonly config: ConfigService,
     private readonly workspaceService: WorkspaceService,
+    private readonly dockerWorkspaces: DockerWorkspaceService,
     private readonly events: EventEmitter2,
   ) {
     // Ensure node-pty native binaries are executable (npm install sometimes drops perms)
     try {
-      const ptyDir = resolve(__dirname, '..', '..', '..', 'node_modules', 'node-pty', 'prebuilds', `${process.platform}-${process.arch}`);
+      const ptyDir = resolve(__dirname, '..', '..', '..', '..', 'node_modules', 'node-pty', 'prebuilds', `${process.platform}-${process.arch}`);
       const helper = resolve(ptyDir, 'spawn-helper');
       chmodSync(helper, 0o755);
       const native = resolve(ptyDir, 'pty.node');
@@ -217,14 +221,20 @@ export class SessionService {
     chatId: string,
   ): Promise<ActiveSession> {
     const workspace = dto.workspaceName
-      ? (await this.workspaceService.findByName(dto.workspaceName)) ??
-        (await this.workspaceService.findById(dto.workspaceName))
-      : await this.workspaceService.getActive();
+      ? (await this.workspaceService.findByName(dto.workspaceName, telegramUserId)) ??
+        (await this.workspaceService.findById(dto.workspaceName, telegramUserId))
+      : await this.workspaceService.getActive(telegramUserId);
 
     if (!workspace) {
       throw new BadRequestException(
-        'No active workspace. Create one: /workspace create <name> <path>',
+        'No active workspace. Create one: /workspace create <name>',
       );
+    }
+
+    const syncResults = await this.workspaceService.syncProjects(workspace.id, telegramUserId);
+    const failedSync = syncResults.filter((r) => !r.ok);
+    if (failedSync.length > 0) {
+      this.logger.warn(`Workspace ${workspace.name} git sync completed with ${failedSync.length} warning(s)`);
     }
 
     const publicId = await this.generatePublicId();
@@ -249,12 +259,67 @@ export class SessionService {
     // progress indicators, and interactive prompts.
     this.logger.log(`Spawning PTY: ${this.opencodePath} in ${workspace.workDir}`);
 
-    const ptyProcess = pty.spawn(this.opencodePath, ['--prompt', dto.prompt], {
+    const creds = await this.workspaceService.getWorkspaceCredentials(workspace.id);
+    const ensuredContainerId = await this.dockerWorkspaces.ensureContainer({
+      workspaceId: workspace.id,
+      tenantId: workspace.tenantId,
+      workDir: workspace.workDir,
+      providerId: workspace.providerId,
+      apiKey: creds.apiKey,
+      model: dto.model ?? workspace.model,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
+    });
+    if (!ensuredContainerId) {
+      throw new BadRequestException(
+        'Docker container is not available. Workspace containers must be enabled to run sessions.',
+      );
+    }
+
+    const spec = {
+      workspaceId: workspace.id,
+      tenantId: workspace.tenantId,
+      workDir: workspace.workDir,
+      providerId: workspace.providerId,
+      apiKey: creds.apiKey,
+      model: dto.model ?? workspace.model,
+      gitToken: creds.gitToken,
+      gitUsername: creds.gitUsername,
+    };
+
+    const spawnCommand = 'docker';
+    const opencodeArgs = ['--prompt', dto.prompt, ...(dto.model ?? workspace.model ? ['--model', dto.model ?? workspace.model ?? ''] : [])];
+
+    // Write encrypted credentials as temp file instead of env vars
+    let credFilePath: string | undefined;
+    let askpassPath: string | undefined;
+    const credFileContent = this.dockerWorkspaces.buildCredentialsFileContent(spec);
+    if (credFileContent) {
+      credFilePath = await this.dockerWorkspaces.writeCredentialsFile(ensuredContainerId, credFileContent);
+      askpassPath = await this.dockerWorkspaces.writeGitAskpassScript(ensuredContainerId);
+    }
+
+    const execEnv: Record<string, string> = {};
+    if (credFilePath) execEnv.CREDENTIALS_FILE = credFilePath;
+    if (askpassPath) execEnv.GIT_ASKPASS = askpassPath;
+
+    const spawnArgs = this.dockerWorkspaces.dockerExecArgs(ensuredContainerId, workspace.workDir, 'opencode', opencodeArgs, execEnv);
+    const ptyProcess = pty.spawn(spawnCommand, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
       rows: 40,
       cwd: workspace.workDir,
       env: { ...process.env, TERM: 'xterm-256color' },
+    });
+
+    // Cleanup credentials file when session exits
+    ptyProcess.onExit(() => {
+      if (credFilePath) {
+        this.dockerWorkspaces.removeCredentialsFile(ensuredContainerId, credFilePath).catch(() => {});
+      }
+      if (askpassPath) {
+        this.dockerWorkspaces.removeCredentialsFile(ensuredContainerId, askpassPath).catch(() => {});
+      }
     });
 
     const terminal = new Terminal({ cols: 120, rows: 40, allowProposedApi: true });
@@ -343,7 +408,7 @@ export class SessionService {
    * Send text to the active PTY session. If the PTY is still alive, write
    * to it. Otherwise spawn a new PTY for the follow-up prompt.
    */
-  sendToSession(sessionId: string, text: string, cwd?: string): void {
+  async sendToSession(sessionId: string, text: string, cwd?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new NotFoundException(`Session ${sessionId} not found`);
@@ -356,7 +421,31 @@ export class SessionService {
       // PTY might be dead — spawn a new one
       this.logger.log(`PTY write failed, spawning new for: ${text.slice(0, 100)}`);
       try {
-        const newPty = pty.spawn(this.opencodePath, ['--prompt', text], {
+        const workspace = await this.prisma.workspace.findUnique({ where: { id: session.workspaceId } });
+        if (!workspace?.containerId) {
+          throw new BadRequestException('Workspace has no container; cannot spawn follow-up PTY.');
+        }
+        const spawnCommand = 'docker';
+        const creds = await this.workspaceService.getWorkspaceCredentials(workspace.id);
+        const spec = {
+          workspaceId: workspace.id,
+          tenantId: workspace.tenantId,
+          workDir: workspace.workDir,
+          providerId: workspace.providerId,
+          apiKey: creds.apiKey,
+          model: workspace.model,
+          gitToken: creds.gitToken,
+          gitUsername: creds.gitUsername,
+        };
+        let credFilePath: string | undefined;
+        const credContent = this.dockerWorkspaces.buildCredentialsFileContent(spec);
+        if (credContent) {
+          credFilePath = await this.dockerWorkspaces.writeCredentialsFile(workspace.containerId, credContent);
+        }
+        const execEnv: Record<string, string> = {};
+        if (credFilePath) execEnv.CREDENTIALS_FILE = credFilePath;
+        const spawnArgs = this.dockerWorkspaces.dockerExecArgs(workspace.containerId, cwd ?? session.workspaceDir, 'opencode', ['--prompt', text], execEnv);
+        const newPty = pty.spawn(spawnCommand, spawnArgs, {
           name: 'xterm-color',
           cols: 120,
           rows: 40,
@@ -386,6 +475,9 @@ export class SessionService {
           session.running = false;
           session.emitter.emit('exit', exitCode, Date.now() - session.startedAt);
           this.logger.log(`Session ${session.publicId} follow-up PTY exited (code: ${exitCode})`);
+          if (credFilePath && workspace.containerId) {
+            this.dockerWorkspaces.removeCredentialsFile(workspace.containerId, credFilePath).catch(() => {});
+          }
         });
 
         this.logger.log(
@@ -458,6 +550,13 @@ export class SessionService {
 
   getActiveSession(sessionId: string): ActiveSession | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  findByPublicId(publicId: string): ActiveSession | undefined {
+    for (const session of this.sessions.values()) {
+      if (session.publicId === publicId) return session;
+    }
+    return undefined;
   }
 
   getUserSession(telegramUserId: string): ActiveSession | undefined {

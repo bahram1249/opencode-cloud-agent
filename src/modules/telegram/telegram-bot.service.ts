@@ -88,10 +88,11 @@ export class TelegramBotService {
         { command: 'ctrl_c', description: 'Interrupt (Ctrl+C) — /ctrl_c' },
         { command: 'workspace', description: 'Manage workspaces — /workspace <action>' },
         { command: 'project', description: 'Manage git projects — /project <action>' },
-        { command: 'git', description: 'Git operations — /git <subcommand>' },
-        { command: 'opencode', description: 'Send raw OpenCode command — /opencode <args>' },
+        { command: 'git', description: 'Git operations & credentials — /git <subcommand>' },
+        { command: 'opencode', description: 'Send text to active session (alias for /send)' },
         { command: 'model', description: 'Switch model — /model <name>' },
         { command: 'skill', description: 'Load skill — /skill <name>' },
+
         { command: 'help', description: 'Show help' },
       ]);
       this.logger.log('Bot commands set successfully');

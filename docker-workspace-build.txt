@@ -1,0 +1,2 @@
+docker build -f docker/opencode-workspace.Dockerfile -t opencode-workspace:latest .
+

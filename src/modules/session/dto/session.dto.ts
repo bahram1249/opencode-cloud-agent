@@ -17,6 +17,11 @@ export class CreateSessionDto {
   @IsOptional()
   opencodeProfile?: string;
 
+  @ApiPropertyOptional({ description: 'Model override in provider/model format' })
+  @IsString()
+  @IsOptional()
+  model?: string;
+
   @ApiPropertyOptional({ description: 'Enable live streaming to Telegram (default: true)' })
   @IsBoolean()
   @IsOptional()
